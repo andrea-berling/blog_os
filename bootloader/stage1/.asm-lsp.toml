@@ -1,0 +1,13 @@
+[default_config]
+version = "0.10.0"
+assembler = "nasm"
+instruction_set = "x86"
+
+[default_config.opts]
+diagnostics = true
+default_diagnostics = true
+compiler = "nasm"
+compile_flags_txt = [
+  "-f", "bin",
+  "-o", "/dev/null",
+]
