@@ -1,6 +1,12 @@
-[unstable]
-build-std = ["core", "compiler_builtins"]
-build-std-features = ["compiler-builtins-mem"]
+[alias]
+host = ["build", "--target", "x86_64-unknown-linux-gnu"]
+bios = [
+  "build",
+  "-Zbuild-std=core,compiler_builtins",
+  "-Zbuild-std-features=mem",
+  "--target", "i686-bootloader.json"
+]
 [build]
 target = "i686-bootloader.json"
+[target.'cfg(all(target_arch = "x86", target_os = "none"))']
 rustflags = ["-C", "link-args=-Tbootloader/link.x -Map=layout.map -no-pie", "-C", "lto=no", "-C", "relocation-model=static", "-C", "force-unwind-tables=no"]

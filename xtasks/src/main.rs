@@ -45,7 +45,7 @@ mod xtasks {
 fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
     // Build stage2
     let status = Command::new("cargo")
-        .args(["+nightly", "build", "--release"])
+        .args(["+nightly", "bios", "--release"])
         .current_dir(root_dir.join("bootloader"))
         .status()
         .context("building stage2")?;
