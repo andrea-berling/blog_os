@@ -20,30 +20,6 @@ pub enum Color {
     White = 15,
 }
 
-impl From<u16> for Color {
-    fn from(value: u16) -> Self {
-        match value {
-            0 => Color::Black,
-            1 => Color::Blue,
-            2 => Color::Green,
-            3 => Color::Cyan,
-            4 => Color::Red,
-            5 => Color::Magenta,
-            6 => Color::Brown,
-            7 => Color::LightGray,
-            8 => Color::DarkGray,
-            9 => Color::LightBlue,
-            10 => Color::LightGreen,
-            11 => Color::LightCyan,
-            12 => Color::LightRed,
-            13 => Color::Pink,
-            14 => Color::Yellow,
-            15 => Color::White,
-            _ => panic!("Invalid color value: {}", value),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // So that ColorCode has the exact same data layout as u8
 #[repr(transparent)]
@@ -60,21 +36,6 @@ impl ColorCode {
 struct ScreenChar {
     ascii_character: u8,
     color_code: ColorCode,
-}
-
-impl From<ScreenChar> for u16 {
-    fn from(value: ScreenChar) -> Self {
-        ((value.color_code.0 as u16) << 8) | (value.ascii_character as u16)
-    }
-}
-
-impl From<u16> for ScreenChar {
-    fn from(value: u16) -> Self {
-        Self {
-            ascii_character: value as u8,
-            color_code: ColorCode::new(((value >> 8) & 0xf).into(), (value >> 12).into()),
-        }
-    }
 }
 
 const BUFFER_HEIGHT: usize = 25;
@@ -97,7 +58,7 @@ pub struct Writer {
 
 impl Writer {
     pub fn new() -> Self {
-        // SAFETY: VGA_BUF is the same throughout execution
+        // SAFETY: VGA_BUF is the same throughout execution, and ScreenChar has alignment 1
         let buf_ref: Option<&'static mut Buffer> = unsafe { VGA_BUF.as_mut() };
         Self {
             column_position: 0,

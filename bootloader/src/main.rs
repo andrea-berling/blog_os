@@ -32,9 +32,55 @@ fn main() {
     let mut args = std::env::args();
     args.next().unwrap();
     let bytes = std::fs::read(args.next().unwrap()).unwrap();
-    let header = elf::Header::new(&bytes).unwrap();
-
+    let elf_file = match elf::File::try_from(bytes.as_slice()) {
+        Ok(elf_file) => elf_file,
+        Err(err) => {
+            println!("{err}");
+            return;
+        }
+    };
     let mut s = String::new();
-    header.write_to(&mut s).unwrap();
+    elf_file.header().write_to(&mut s).unwrap();
     print!("{s}");
+
+    let string_table = elf_file
+        .get_section_by_index(elf_file.header().string_table_index().into())
+        .unwrap()
+        .unwrap()
+        .downcast_to_string_table()
+        .unwrap();
+
+    println!("--------");
+    println!("SECTIONS");
+    println!("--------");
+    for section in elf_file.sections() {
+        use core::fmt::Write as _;
+
+        let section = section.unwrap();
+
+        let mut s = String::new();
+        let section_name = string_table
+            .get_string(section.name_index() as usize)
+            .unwrap()
+            .unwrap();
+        s.write_fmt(format_args!("Section name: {section_name}\n"))
+            .unwrap();
+        section.write_to(&mut s).unwrap();
+        println!("--------");
+        print!("{s}");
+        println!("--------");
+    }
+
+    println!("--------");
+    println!("SEGMENTS");
+    println!("--------");
+    for header in elf_file.program_headers() {
+        let header = header.unwrap();
+
+        let mut s = String::new();
+        header.write_to(&mut s).unwrap();
+        println!("--------");
+        print!("{s}");
+        println!("--------");
+    }
 }
