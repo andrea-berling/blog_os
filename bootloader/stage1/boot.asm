@@ -17,23 +17,23 @@ mov ds, ax
 ; save boot drive from BIOS (already in DL)
 mov [BootDrive], dl
 
+; ---- get extensions via EDD (AH=41h)
+mov ah, 0x41
+mov bx, 0x55aa
+mov dl, [BootDrive]
+call interrupt_with_retry
+
+; ---- get drive parameters via EDD (AH=48h)
+mov ah, 0x48
+mov dl, [BootDrive]
+mov si, DriveParameters ; ---- addres for the result
+call interrupt_with_retry
+
 ; ---- read stage2 via EDD (AH=42h) ----
+mov ah, 0x42
 mov si, dap
 mov dl, [BootDrive]
-
-.read_retry:
- mov ah, 0x42
- int 0x13
- jc .read_fail
- jmp short .read_ok
-.read_fail:
- xor ax, ax          ; AH=0: reset disk
- int 0x13
- jc .hard_fail
- jmp .read_retry
-.hard_fail:
- hlt                 ; you may want a tiny "error" loop here
-.read_ok:
+call interrupt_with_retry
 
 ; enter protected mode
 cli
@@ -54,7 +54,27 @@ mov ss, ax
 mov fs, ax
 mov gs, ax
 mov esp, 0x90000
+; cdecl convention to pass parameters to main
+mov dword [esp + 4], DriveParameters
 jmp dword 0x0010000
+
+; precondition: ah contains the desired interrupt code
+; precondition: all the other argumetns (e.g. DS,SI) are already set
+interrupt_with_retry:
+ int 0x13
+ jc .soft_fail
+ jmp short .ok
+.soft_fail:
+ push ax
+ xor ax, ax          ; AH=0: reset disk
+ int 0x13
+ jc .hard_fail
+ pop ax
+ jmp interrupt_with_retry
+.hard_fail:
+ hlt
+.ok:
+ ret
 
 align 8
 ; flat 0..4GiB code/data
@@ -79,6 +99,7 @@ dw 0x1000
 dq 1
 
 BootDrive db 0
+DriveParameters dw 30
 
 times 510 - ($ - $$) db 0
 dw 0xAA55

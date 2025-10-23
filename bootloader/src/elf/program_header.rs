@@ -1,8 +1,10 @@
 use crate::elf::{
     Halfword,
-    error::{self, Facility, InternalError, Kind, Reason, try_read_error},
+    error::{self, Facility},
     header,
 };
+
+use crate::error::{InternalError, Kind, Reason, try_read_error};
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -44,18 +46,22 @@ pub enum HeaderEntry {
 }
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: Facility) -> error::Error {
-        error::Error::InternalError(InternalError::new(facility, kind, error::Context::Parsing))
+    fn error(kind: Kind, facility: Facility) -> crate::error::Error {
+        crate::error::Error::InternalError(crate::error::InternalError::new(
+            crate::error::Facility::Elf(facility),
+            kind,
+            crate::error::Context::Parsing,
+        ))
     }
 
     pub fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: Facility,
-    ) -> error::Result<Self> {
+    ) -> crate::error::Result<Self> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -67,7 +73,7 @@ impl HeaderEntry {
                 .map(HeaderEntry::Elf32),
 
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -155,7 +161,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> error::Result<()> {
+    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> crate::error::Result<()> {
         writeln!(writer, "Type: {}", self.r#type())?;
         writeln!(writer, "Offset: {:#x}", self.offset())?;
         writeln!(writer, "Virtual Address: {:#x}", self.virtual_address())?;
@@ -226,15 +232,15 @@ pub(crate) struct ProgramHeaderEntries<'a> {
     class: header::Class,
     bytes_read_so_far: usize,
 }
-use error::Kind::*;
+use crate::error::Kind::*;
 use zerocopy::TryFromBytes as _;
 
 impl<'a> ProgramHeaderEntries<'a> {
-    fn error(kind: error::Kind) -> error::Error {
-        error::Error::InternalError(error::InternalError::new(
-            error::Facility::ProgramHeader,
+    fn error(kind: crate::error::Kind) -> crate::error::Error {
+        crate::error::Error::InternalError(crate::error::InternalError::new(
+            crate::error::Facility::Elf(error::Facility::ProgramHeader),
             kind,
-            error::Context::Parsing,
+            crate::error::Context::Parsing,
         ))
     }
 
@@ -242,7 +248,7 @@ impl<'a> ProgramHeaderEntries<'a> {
         bytes: &'a [u8],
         class: header::Class,
         n_entries: Halfword,
-    ) -> error::Result<Self> {
+    ) -> crate::error::Result<Self> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
@@ -260,7 +266,7 @@ impl<'a> ProgramHeaderEntries<'a> {
 }
 
 impl<'a> Iterator for ProgramHeaderEntries<'a> {
-    type Item = error::Result<HeaderEntry>;
+    type Item = crate::error::Result<HeaderEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {

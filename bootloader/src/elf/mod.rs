@@ -41,7 +41,10 @@ impl<'a> File<'a> {
         .unwrap()
     }
 
-    pub fn get_section_by_index(&self, index: usize) -> Option<error::Result<section::Section>> {
+    pub fn get_section_by_index(
+        &self,
+        index: usize,
+    ) -> Option<crate::error::Result<section::Section>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
@@ -75,7 +78,7 @@ impl<'a> File<'a> {
 }
 
 impl<'a> TryFrom<&'a [u8]> for File<'a> {
-    type Error = error::Error;
+    type Error = crate::error::Error;
 
     fn try_from(bytes: &'a [u8]) -> core::result::Result<Self, Self::Error> {
         Ok(Self {

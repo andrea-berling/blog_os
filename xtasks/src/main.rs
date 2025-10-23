@@ -147,6 +147,11 @@ fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
     bootloader.append(&mut stage2);
     let bootloader_path = root_dir.join("bootloader.bin");
 
+    bootloader.resize(
+        bootloader.len().div_ceil(SECTOR_SIZE as usize) * SECTOR_SIZE as usize,
+        0,
+    );
+
     std::fs::write(bootloader_path, bootloader).context("writing bootloader file")?;
     Ok(())
 }

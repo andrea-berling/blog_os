@@ -26,7 +26,7 @@ pub enum Color {
 struct ColorCode(u8);
 
 impl ColorCode {
-    fn new(foreground: Color, background: Color) -> ColorCode {
+    const fn new(foreground: Color, background: Color) -> ColorCode {
         ColorCode((background as u8) << 4 | (foreground as u8))
     }
 }
@@ -57,7 +57,7 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         // SAFETY: VGA_BUF is the same throughout execution, and ScreenChar has alignment 1
         let buf_ref: Option<&'static mut Buffer> = unsafe { VGA_BUF.as_mut() };
         Self {

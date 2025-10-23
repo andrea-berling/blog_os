@@ -1,0 +1,4 @@
+magic_break: enabled=1
+ata0-master: type=disk, path="bootloader.bin", cylinders=1, heads=1, spt=18
+boot: disk
+display_library: x, options="gui_debug"

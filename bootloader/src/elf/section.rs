@@ -1,10 +1,9 @@
 use core::{fmt::Display, str::Utf8Error};
 
-use crate::elf::{
-    Halfword, Word,
-    error::{self, Facility, InternalError, Kind, try_read_error},
-    header,
-};
+use crate::elf::{self, Halfword, Word, header};
+
+use crate::error::{self, Facility, InternalError, Kind, try_read_error};
+use crate::make_flags;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -50,18 +49,22 @@ pub enum HeaderEntry {
 }
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: Facility) -> error::Error {
-        error::Error::InternalError(InternalError::new(facility, kind, error::Context::Parsing))
+    fn error(kind: Kind, facility: elf::error::Facility) -> error::Error {
+        error::Error::InternalError(InternalError::new(
+            crate::error::Facility::Elf(facility),
+            kind,
+            error::Context::Parsing,
+        ))
     }
 
     pub fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
-        facility: Facility,
+        facility: elf::error::Facility,
     ) -> error::Result<Self> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -72,7 +75,7 @@ impl HeaderEntry {
                 })
                 .map(HeaderEntry::Elf32),
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -265,36 +268,7 @@ impl Display for SectionEntryType {
     }
 }
 
-pub struct Flags(u64);
-
-impl Display for Flags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for i in 0..=6 {
-            if i == 3 {
-                continue;
-            }
-            // PANIC: no panics, values have been purposedly chose not to
-            let flag = FlagType::try_from(1 << i).unwrap();
-            if self.is_set(flag) {
-                if i > 1 {
-                    write!(f, "|")?;
-                }
-                write!(f, "{}", flag)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Flags {
-    pub fn is_set(&self, flag: FlagType) -> bool {
-        self.0 & (flag as u64) != 0
-    }
-
-    pub fn set(&mut self, flag: FlagType) {
-        self.0 |= flag as u64;
-    }
-}
+make_flags!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3);
 
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u32)]
@@ -354,7 +328,7 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
             HeaderEntry::try_from_bytes(
                 self.bytes.get(self.bytes_read_so_far..)?,
                 self.class,
-                error::Facility::SectionHeaderEntry(entry_size as Halfword),
+                elf::error::Facility::SectionHeaderEntry(entry_size as Halfword),
             )
             .inspect(|_| {
                 self.bytes_read_so_far += entry_size;
@@ -366,7 +340,7 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
 impl<'a> SectionHeaderEntries<'a> {
     fn error(kind: error::Kind) -> error::Error {
         error::Error::InternalError(error::InternalError::new(
-            error::Facility::SectionHeader,
+            error::Facility::Elf(elf::error::Facility::SectionHeader),
             kind,
             error::Context::Parsing,
         ))

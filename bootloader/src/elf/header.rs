@@ -1,13 +1,13 @@
 use core::fmt::Display;
 use core::fmt::Write;
 
-use crate::elf::Word;
-use crate::elf::error;
-use crate::elf::error::InternalError;
-use crate::elf::error::Kind;
-use crate::elf::error::try_read_error;
+use crate::elf;
 use crate::elf::program_header;
 use crate::elf::section;
+use crate::error;
+use crate::error::InternalError;
+use crate::error::Kind;
+use crate::error::try_read_error;
 use num_enum::TryFromPrimitive;
 use num_traits::AsPrimitive;
 use num_traits::PrimInt;
@@ -407,12 +407,15 @@ impl TryFrom<&[u8]> for Header {
 
 impl Header {
     fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> error::Error {
-        try_read_error(error::Facility::Header, err)
+        try_read_error(
+            crate::error::Facility::Elf(elf::error::Facility::Header),
+            err,
+        )
     }
 
     fn error(kind: Kind) -> error::Error {
         error::Error::InternalError(InternalError::new(
-            error::Facility::Header,
+            error::Facility::Elf(elf::error::Facility::Header),
             kind,
             error::Context::Parsing,
         ))
