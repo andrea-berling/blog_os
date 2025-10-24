@@ -29,6 +29,8 @@ pub enum Reason {
         dst_type_prefix: [u8; CONTEXT_LENGTH],
         alignment: usize,
     },
+    #[error("invalid values for reserved bits")]
+    InvalidValuesForReservedBits,
 }
 
 #[derive(Error, Debug)]

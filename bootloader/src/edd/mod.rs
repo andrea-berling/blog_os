@@ -28,6 +28,315 @@ struct DriveParametersRaw {
     configuration_parameters: U32<LE>,
 }
 
+#[derive(TryFromBytes)]
+#[repr(C)]
+struct DevicePathInformationRaw {
+    bedd: U16<LE>,
+    length: u8,
+    reserved_1: u8,
+    reserved_2: U16<LE>,
+    host_bus_type: [u8; 4],
+    interface_type: [u8; 8],
+    interface_path: U64<LE>,
+    device_path: U64<LE>,
+    reserved_3: u8,
+    checksum: u8,
+}
+
+#[derive(Debug)]
+pub enum HostBus {
+    Pci { bus: u8, slot: u8, function: u8 },
+    Isa { base_address: u16 },
+}
+
+impl Display for HostBus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self {
+            HostBus::Pci {
+                bus,
+                slot,
+                function,
+            } => writeln!(
+                f,
+                "  Host Bus: PCI (Bus: {}, Slot: {}, Function: {})",
+                bus, slot, function
+            ),
+            HostBus::Isa { base_address } => {
+                writeln!(f, "  Host Bus: ISA (Base Address: {:#X})", base_address)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Interface {
+    Ata {
+        is_slave: bool,
+    },
+    Atapi {
+        is_slave: bool,
+        logical_unit_number: u8,
+    },
+    Scsi {
+        logical_unit_number: u8,
+    },
+    Usb {
+        tbd: u8,
+    },
+    _1394 {
+        guid: u64,
+    },
+    Fibre {
+        wwn: u8,
+    },
+}
+
+impl Display for Interface {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self {
+            Interface::Ata { is_slave } => {
+                writeln!(f, "  Interface: ATA (Is Slave: {})", is_slave)
+            }
+            Interface::Atapi {
+                is_slave,
+                logical_unit_number,
+            } => writeln!(
+                f,
+                "  Interface: ATAPI (Is Slave: {}, LUN: {})",
+                is_slave, logical_unit_number
+            ),
+            Interface::Scsi {
+                logical_unit_number,
+            } => writeln!(f, "  Interface: SCSI (LUN: {})", logical_unit_number),
+            Interface::Usb { tbd } => writeln!(f, "  Interface: USB (TBD: {})", tbd),
+            Interface::_1394 { guid } => writeln!(f, "  Interface: 1394 (GUID: {:#X})", guid),
+            Interface::Fibre { wwn } => writeln!(f, "  Interface: FIBRE (WWN: {:#X})", wwn),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DevicePathInformation {
+    host_bus: HostBus,
+    interface: Interface,
+}
+
+impl Display for DevicePathInformation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Device Path Information:")?;
+        write!(f, "{}", self.host_bus)?;
+        write!(f, "{}", self.interface)
+    }
+}
+
+impl DevicePathInformation {
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> crate::error::Error {
+        use crate::error::Facility::*;
+        use error::Facility::*;
+        try_read_error(Edd(DevicePathInformation), err)
+    }
+}
+
+impl TryFrom<&[u8]> for DevicePathInformation {
+    type Error = crate::error::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        use crate::error::Kind::*;
+        use crate::error::Reason::*;
+        let (device_path_information_raw, _rest) =
+            DevicePathInformationRaw::try_read_from_prefix(value).map_err(Self::try_read_error)?;
+
+        if device_path_information_raw.bedd.get() != 0xbedd {
+            return Err(crate::error::Error::InternalError(InternalError::new(
+                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                CantReadField(
+                    "bedd",
+                    InvalidValue(device_path_information_raw.bedd.get().into()),
+                ),
+                crate::error::Context::Parsing,
+            )));
+        }
+
+        if device_path_information_raw.reserved_1 != 0
+            || device_path_information_raw.reserved_2.get() != 0
+            || device_path_information_raw.reserved_3 != 0
+        {
+            return Err(crate::error::Error::InternalError(InternalError::new(
+                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                CantReadField("bedd", InvalidValuesForReservedBits),
+                crate::error::Context::Parsing,
+            )));
+        }
+
+        if device_path_information_raw.length as usize != size_of::<DevicePathInformationRaw>() {
+            return Err(crate::error::Error::InternalError(InternalError::new(
+                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                CantReadField(
+                    "length",
+                    InvalidValue(device_path_information_raw.length.into()),
+                ),
+                crate::error::Context::Parsing,
+            )));
+        }
+
+        let checksum: u8 = value[..size_of::<DevicePathInformationRaw>() - 1]
+            .iter()
+            .fold(0, |checksum, &byte| checksum.wrapping_add(byte));
+
+        if checksum.wrapping_add(device_path_information_raw.checksum) != 0 {
+            return Err(crate::error::Error::InternalError(InternalError::new(
+                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                CantReadField(
+                    "checksum",
+                    InvalidValue(device_path_information_raw.checksum.into()),
+                ),
+                crate::error::Context::Parsing,
+            )));
+        }
+
+        Self::try_from(&device_path_information_raw)
+    }
+}
+
+impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
+    type Error = crate::error::Error;
+
+    fn try_from(value: &DevicePathInformationRaw) -> Result<Self, Self::Error> {
+        use crate::error::Kind::*;
+        use crate::error::Reason::*;
+        let interface_path = value.interface_path.get().to_le_bytes();
+        let host_bus = match value.host_bus_type {
+            bytes if bytes.starts_with(b"PCI") => {
+                let bus = interface_path[0];
+                let slot = interface_path[1];
+                let function = interface_path[2];
+                if !interface_path[3..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "PCI interface path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                HostBus::Pci {
+                    bus,
+                    slot,
+                    function,
+                }
+            }
+            bytes if bytes.starts_with(b"ISA") => {
+                let base_address = value.interface_path.get() as u16;
+                if !interface_path[2..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "ISA interface path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                HostBus::Isa { base_address }
+            }
+            bytes => {
+                return Err(crate::error::Error::InternalError(InternalError::new(
+                    crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    CantReadField(
+                        "host bus type",
+                        InvalidValue(u32::from_be_bytes(bytes).into()),
+                    ),
+                    crate::error::Context::Parsing,
+                )));
+            }
+        };
+
+        let device_path = value.device_path.get().to_le_bytes();
+        let interface = match value.interface_type {
+            bytes if bytes.starts_with(b"ATA") => {
+                let is_slave = device_path[0] == 1;
+                if !device_path[1..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "ATA device path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                Interface::Ata { is_slave }
+            }
+            bytes if bytes.starts_with(b"ATAPI") => {
+                let is_slave = device_path[0] == 1;
+                let logical_unit_number = device_path[1];
+                if !device_path[2..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "ATAPI device path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                Interface::Atapi {
+                    is_slave,
+                    logical_unit_number,
+                }
+            }
+            bytes if bytes.starts_with(b"SCSI") => {
+                let logical_unit_number = device_path[0];
+                if !device_path[1..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "SCSI device path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                Interface::Scsi {
+                    logical_unit_number,
+                }
+            }
+            bytes if bytes.starts_with(b"USB") => {
+                let tbd = device_path[0];
+                if !device_path[1..].iter().all(|&b| b == 0) {
+                    return Err(crate::error::Error::InternalError(InternalError::new(
+                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                        CantReadField(
+                            "USB device path reserved bytes",
+                            InvalidValuesForReservedBits,
+                        ),
+                        crate::error::Context::Parsing,
+                    )));
+                }
+                Interface::Usb { tbd }
+            }
+            bytes if bytes.starts_with(b"1394") => Interface::_1394 {
+                guid: value.device_path.get(),
+            },
+            bytes if bytes.starts_with(b"FIBRE") => Interface::Fibre {
+                wwn: device_path[0],
+            },
+            bytes => {
+                return Err(crate::error::Error::InternalError(InternalError::new(
+                    crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    CantReadField("interface type", InvalidValue(u64::from_be_bytes(bytes))),
+                    crate::error::Context::Parsing,
+                )));
+            }
+        };
+        Ok(Self {
+            host_bus,
+            interface,
+        })
+    }
+}
+
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u16)]
 pub enum InfoFlagType {
@@ -67,7 +376,8 @@ pub struct DriveParameters {
     sectors_per_track: u32,
     sectors: u64,
     bytes_per_sector: u16,
-    configuration_parameters: Option<FixedDiskParameterTable>,
+    fixed_disk_parameter_table: Option<FixedDiskParameterTable>,
+    device_path_information: Option<DevicePathInformation>,
 }
 
 impl Display for DriveParameters {
@@ -80,11 +390,19 @@ impl Display for DriveParameters {
         writeln!(f, "  Sectors per Track: {}", self.sectors_per_track)?;
         writeln!(f, "  Total Sectors: {}", self.sectors)?;
         writeln!(f, "  Bytes per Sector: {}", self.bytes_per_sector)?;
-        match &self.configuration_parameters {
+        match &self.fixed_disk_parameter_table {
             Some(configuration_parameters) => {
-                writeln!(f, "{configuration_parameters}")
+                write!(f, "{configuration_parameters}")?;
             }
-            None => writeln!(f, "  Configuration Parameters: Not Present"),
+            None => {
+                writeln!(f, "  Configuration Parameters: Not Present")?;
+            }
+        }
+        match &self.device_path_information {
+            Some(device_path_information) => {
+                write!(f, "{device_path_information}")
+            }
+            None => writeln!(f, "  Device Path Information: Not Present"),
         }
     }
 }
@@ -163,7 +481,8 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
             sectors_per_track: value.sectors_per_track.get(),
             sectors: value.sectors.get(),
             bytes_per_sector: value.bytes_per_sector.get(),
-            configuration_parameters: None,
+            fixed_disk_parameter_table: None,
+            device_path_information: None,
         })
     }
 }
@@ -183,6 +502,11 @@ impl DriveParameters {
         if resolve_fdpt && drive_parameters_raw.configuration_parameters.get() != u32::MAX {
             result.resolve_fdbt(drive_parameters_raw.configuration_parameters.get())?;
         }
+
+        if u16::from_le_bytes([bytes[30], bytes[31]]) == 0xbedd {
+            result.device_path_information = Some(DevicePathInformation::try_from(&bytes[30..])?)
+        }
+
         Ok(result)
     }
 
@@ -200,7 +524,7 @@ impl DriveParameters {
         // Address is in seg:offset format, with offset coming first
         fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
 
-        self.configuration_parameters = Some(FixedDiskParameterTable::try_from(
+        self.fixed_disk_parameter_table = Some(FixedDiskParameterTable::try_from(
             //SAFETY: If we got to this point, the fdbt address is valid and points to a
             //FixedDiskParameterTableRaw sized byte array
             unsafe {

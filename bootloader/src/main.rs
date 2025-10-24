@@ -5,7 +5,7 @@
 #![forbid(clippy::multiple_unsafe_ops_per_block)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
-use core::fmt::Write as _;
+use core::{arch::asm, fmt::Write as _, panic};
 
 mod edd;
 mod elf;
@@ -28,17 +28,23 @@ fn panic(info: &PanicInfo) -> ! {
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.start")]
 //#[cfg(target_os = "none")]
-pub extern "C" fn start(drive_parameters_pointer: *const u8) -> ! {
+pub extern "C" fn start(
+    drive_parameters_pointer: *const u8,
+    edd_version: u32,
+    extensions_bitmap: u32,
+) -> ! {
     let mut vga_writer = vga::Writer::new();
     vga_writer.write_string("Hello from stage2!\n");
 
     writeln!(vga_writer, "x = {drive_parameters_pointer:#x?}").unwrap();
+    writeln!(vga_writer, "edd_version = {edd_version:#x?}").unwrap();
+    writeln!(vga_writer, "extensions_bitmap = {extensions_bitmap:#x?}").unwrap();
 
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
     // buffer of 30 bytes containing the result
     let drive_parameters_bytes = unsafe {
-        core::ptr::slice_from_raw_parts(drive_parameters_pointer, edd::DRIVE_PARAMETERS_BUFFER_SIZE)
+        core::ptr::slice_from_raw_parts(drive_parameters_pointer, 66)
             .as_ref()
             .unwrap()
     };

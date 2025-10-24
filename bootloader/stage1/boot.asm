@@ -22,6 +22,8 @@ mov ah, 0x41
 mov bx, 0x55aa
 mov dl, [BootDrive]
 call interrupt_with_retry
+mov [ExtensionsBitmap], cx
+mov [EDDVersion], ah
 
 ; ---- get drive parameters via EDD (AH=48h)
 mov ah, 0x48
@@ -55,8 +57,10 @@ mov fs, ax
 mov gs, ax
 mov esp, 0x90000
 ; cdecl convention to pass parameters to main
-mov dword [esp + 4], DriveParameters
-jmp dword 0x0010000
+push dword [ExtensionsBitmap]
+push dword [EDDVersion]
+push dword DriveParameters
+call 0x0010000
 
 ; precondition: ah contains the desired interrupt code
 ; precondition: all the other argumetns (e.g. DS,SI) are already set
@@ -99,7 +103,11 @@ dw 0x1000
 dq 1
 
 BootDrive db 0
-DriveParameters dw 30
+align 4
+EDDVersion dd 0
+ExtensionsBitmap dd 0
+align 2
+DriveParameters dw 66
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
