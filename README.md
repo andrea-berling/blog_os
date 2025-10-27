@@ -1,5 +1,7 @@
 # blog_os
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/andrea-berling/blog_os)
+
 **Note:** This project is for the x86 architecture.
 
 This project is a hobby operating system created by following the excellent blog series [Writing an OS in Rust](https://os.phil-opp.com) by Philipp Oppermann.
