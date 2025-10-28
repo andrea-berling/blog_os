@@ -6,6 +6,7 @@ bios = [
   "-Zbuild-std-features=mem",
   "--target", "i686-bootloader.json"
 ]
+test_host = ["test", "--target", "x86_64-unknown-linux-gnu"]
 [build]
 target = "i686-bootloader.json"
 [target.'cfg(all(target_arch = "x86", target_os = "none"))']

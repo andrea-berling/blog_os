@@ -1,10 +1,10 @@
 // The sacred scriptures:
 // https://wiki.sensi.org/download/doc/ata_edd_11.pdf
 // http://www.o3one.org/hwdocs/bios_doc/bios_specs_edd30.pdf
-
 pub mod error;
 use core::fmt::Display;
 
+use core::fmt::Write as _;
 use num_enum::TryFromPrimitive;
 use zerocopy::{LE, TryFromBytes, TryReadError, U16, U32, U64};
 
@@ -13,7 +13,8 @@ use crate::{
     make_flags,
 };
 
-pub const DRIVE_PARAMETERS_BUFFER_SIZE: usize = size_of::<DriveParametersRaw>();
+pub const DRIVE_PARAMETERS_BUFFER_SIZE: usize =
+    size_of::<DriveParametersRaw>() + size_of::<DevicePathInformationRaw>();
 
 #[derive(TryFromBytes)]
 #[repr(C)]
@@ -43,6 +44,7 @@ struct DevicePathInformationRaw {
     checksum: u8,
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub enum HostBus {
     Pci { bus: u8, slot: u8, function: u8 },
@@ -68,6 +70,7 @@ impl Display for HostBus {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub enum Interface {
     Ata {
@@ -115,6 +118,7 @@ impl Display for Interface {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub struct DevicePathInformation {
     host_bus: HostBus,
@@ -367,7 +371,8 @@ impl Display for InfoFlagType {
 
 make_flags!(new_type: InfoFlags, underlying_flag_type: InfoFlagType, repr: u16, bit_skipper: |i| i > 6);
 
-#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, Default)]
 pub struct DriveParameters {
     buffer_size: u16,
     information_flags: InfoFlags,
@@ -564,7 +569,8 @@ impl Display for HeadRegisterFlagType {
 
 make_flags!(new_type: HeadRegisterUpperNibble, underlying_flag_type: HeadRegisterFlagType, repr: u8, bit_skipper: |i| i != 4 && i != 6);
 
-#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, Default)]
 pub struct FixedDiskParameterTable {
     io_port_base: u16,
     control_port_base: u16,
@@ -784,3 +790,120 @@ impl Display for HWSpecificOptionFlagType {
 }
 
 make_flags!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
+
+#[cfg(test)]
+mod tests {
+    use crate::edd::{self, DevicePathInformation, FixedDiskParameterTable};
+
+    const QEMU_DRIVE_PARAMETERS_BYTES: [u8; 66] = [
+        0x1e, 0x0, 0x2, 0x0, 0x2, 0x0, 0x0, 0x0, 0x10, 0x0, 0x0, 0x0, 0x3f, 0x0, 0x0, 0x0, 0x91,
+        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0xe0, 0xf1, 0x80, 0xda, 0xdd, 0xbe, 0x24, 0x0,
+        0x0, 0x0, 0x50, 0x43, 0x49, 0x20, 0x41, 0x54, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20, 0x0, 0x1,
+        0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcd,
+    ];
+
+    const BOCHS_DRIVE_PARAMETERS_BYTES: [u8; 66] = [
+        0x1e, 0x0, 0x2, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x12, 0x0, 0x0, 0x0, 0x91,
+        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x44, 0x2, 0xc0, 0x9f, 0xdd, 0xbe, 0x24, 0x0,
+        0x0, 0x0, 0x49, 0x53, 0x41, 0x20, 0x41, 0x54, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20, 0xf0,
+        0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xdd,
+    ];
+
+    const QEMU_FDPT_BYTES: [u8; 16] = [
+        0xf0, 0x1, 0xf6, 0x3, 0xe0, 0xcb, 0xe, 0x1, 0x0, 0x0, 0x10, 0x0, 0x0, 0x0, 0x11, 0x3b,
+    ];
+
+    const BOCHS_FDPT_BYTES: [u8; 16] = [
+        0xf0, 0x1, 0xf6, 0x3, 0xe0, 0xcb, 0xe, 0x1, 0x0, 0x0, 0x90, 0x0, 0x0, 0x0, 0x11, 0xbb,
+    ];
+
+    #[test]
+    fn test_parse_drive_parameters() {
+        let qemu_drive_parameters =
+            edd::DriveParameters::from_bytes(&QEMU_DRIVE_PARAMETERS_BYTES, false).unwrap();
+        assert_eq!(
+            edd::DriveParameters {
+                buffer_size: 30,
+                information_flags: edd::InfoFlags(2),
+                cylinders: 2,
+                heads: 16,
+                sectors_per_track: 63,
+                sectors: 145,
+                bytes_per_sector: 512,
+                fixed_disk_parameter_table: None,
+                device_path_information: Some(DevicePathInformation {
+                    host_bus: edd::HostBus::Pci {
+                        bus: 0,
+                        slot: 1,
+                        function: 1
+                    },
+                    interface: edd::Interface::Ata { is_slave: false }
+                })
+            },
+            qemu_drive_parameters
+        );
+
+        let bochs_drive_parameters =
+            edd::DriveParameters::from_bytes(&BOCHS_DRIVE_PARAMETERS_BYTES, false).unwrap();
+        assert_eq!(
+            edd::DriveParameters {
+                buffer_size: 30,
+                information_flags: edd::InfoFlags(2),
+                cylinders: 1,
+                heads: 1,
+                sectors_per_track: 18,
+                sectors: 145,
+                bytes_per_sector: 512,
+                fixed_disk_parameter_table: None,
+                device_path_information: Some(DevicePathInformation {
+                    host_bus: edd::HostBus::Isa {
+                        base_address: 0x1f0
+                    },
+                    interface: edd::Interface::Ata { is_slave: false }
+                })
+            },
+            bochs_drive_parameters
+        );
+    }
+
+    #[test]
+    fn test_parse_fdpt() {
+        let qemu_fdpt = edd::FixedDiskParameterTable::try_from(&QEMU_FDPT_BYTES[..]).unwrap();
+        use edd::HWSpecificOptionFlagType::*;
+        use edd::HeadRegisterFlagType::*;
+        assert_eq!(
+            FixedDiskParameterTable {
+                io_port_base: 0x1f0,
+                control_port_base: 0x3f6,
+                head_prefix: edd::HeadRegisterUpperNibble(0xa0 | LBAEnabled as u8),
+                irq: 14,
+                sector_count: 1,
+                dma_channel: 0,
+                dma_type: 0,
+                pio_type: 0,
+                hardware_specific_option_flags: LBATranslation.into(),
+                extension_revision: 17,
+                checksum: 0x3b
+            },
+            qemu_fdpt
+        );
+
+        let bochs_fdpt = edd::FixedDiskParameterTable::try_from(&BOCHS_FDPT_BYTES[..]).unwrap();
+        assert_eq!(
+            FixedDiskParameterTable {
+                io_port_base: 0x1f0,
+                control_port_base: 0x3f6,
+                head_prefix: edd::HeadRegisterUpperNibble(0xa0 | LBAEnabled as u8),
+                irq: 14,
+                sector_count: 1,
+                dma_channel: 0,
+                dma_type: 0,
+                pio_type: 0,
+                hardware_specific_option_flags: LBATranslation | _32BitTransferMode,
+                extension_revision: 17,
+                checksum: 0xbb
+            },
+            bochs_fdpt
+        );
+    }
+}
