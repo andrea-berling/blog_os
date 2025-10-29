@@ -4,14 +4,12 @@
 pub mod error;
 use core::fmt::Display;
 
+use common::make_flags;
 use core::fmt::Write as _;
 use num_enum::TryFromPrimitive;
 use zerocopy::{LE, TryFromBytes, TryReadError, U16, U32, U64};
 
-use crate::{
-    error::{InternalError, Kind, try_read_error},
-    make_flags,
-};
+use crate::error::{InternalError, Kind, try_read_error};
 
 pub const DRIVE_PARAMETERS_BUFFER_SIZE: usize =
     size_of::<DriveParametersRaw>() + size_of::<DevicePathInformationRaw>();

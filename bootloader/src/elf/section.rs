@@ -3,7 +3,6 @@ use core::{fmt::Display, str::Utf8Error};
 use crate::elf::{self, Halfword, Word, header};
 
 use crate::error::{self, Facility, InternalError, Kind, try_read_error};
-use crate::make_flags;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -307,6 +306,7 @@ pub(crate) struct SectionHeaderEntries<'a> {
     class: header::Class,
     bytes_read_so_far: usize,
 }
+use common::make_flags;
 use error::Kind::*;
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;

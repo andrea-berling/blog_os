@@ -1,10 +1,9 @@
 #[macro_export]
 macro_rules! make_flags {
-    (new_type: $type_name:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty$(, bit_skipper: $skip_bit:expr)?) => {
-        #[derive(Debug, Default, PartialEq, Eq)]
-        pub struct $type_name($flag_unsigned_type);
+    (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty$(, bit_skipper: $skip_bit:expr)?) => {
+        make_flags!(new_type: $flags_type, underlying_flag_type: $flag_type, repr: $flag_unsigned_type, nodisplay);
 
-        impl Display for $type_name {
+        impl ::core::fmt::Display for $flags_type {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 for i in 0..<$flag_unsigned_type>::BITS {
                     if false $(|| $skip_bit(i) )? {
@@ -22,9 +21,17 @@ macro_rules! make_flags {
                 Ok(())
             }
         }
+    };
+    (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty, nodisplay) => {
+        #[derive(Debug, Default, PartialEq, Eq)]
+        pub struct $flags_type($flag_unsigned_type);
 
-        impl $type_name {
-            pub fn is_set(&self, flag: $flag_type) -> bool {
+        impl $flags_type {
+            fn empty() -> Self {
+                $flags_type(0)
+            }
+
+            fn is_set(&self, flag: $flag_type) -> bool {
                 self.0 & (flag as $flag_unsigned_type) != 0
             }
 
@@ -33,33 +40,39 @@ macro_rules! make_flags {
             }
         }
 
+        impl From<$flags_type> for $flag_unsigned_type {
+            fn from(value: $flags_type) -> Self {
+                value.0
+            }
+        }
 
-        impl From<$flag_type> for $type_name {
+        impl From<$flag_type> for $flags_type {
             fn from(value: $flag_type) -> Self {
-                let mut result = $type_name(0);
+                let mut result = $flags_type(0);
                 result.set_flag(value);
                 result
             }
         }
 
         impl core::ops::BitOr for $flag_type {
-            type Output = $type_name;
+            type Output = $flags_type;
 
             fn bitor(self, rhs: Self) -> Self::Output {
-                let mut flags = $type_name(0);
+                let mut flags = $flags_type(0);
                 flags.set_flag(self);
                 flags.set_flag(rhs);
                 flags
             }
         }
 
-        impl core::ops::BitOr<$flag_type> for $type_name {
-            type Output = $type_name;
+        impl core::ops::BitOr<$flag_type> for $flags_type {
+            type Output = $flags_type;
 
             fn bitor(mut self, rhs: $flag_type) -> Self::Output {
                 self.set_flag(rhs);
                 self
             }
         }
+
     };
 }

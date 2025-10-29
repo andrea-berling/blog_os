@@ -1,5 +1,6 @@
 [workspace]
-members = ["kernel", "bootloader", "xtasks"]
+members = ["kernel", "bootloader", "xtasks", "common"]
+resolver = "3"
 
 [profile.dev]
 panic = "abort"

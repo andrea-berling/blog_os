@@ -5,13 +5,11 @@
 #![forbid(clippy::multiple_unsafe_ops_per_block)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
-use core::{arch::asm, fmt::Write as _, panic};
+use core::fmt::Write as _;
 
 mod edd;
 mod elf;
 mod error;
-mod macros;
-mod vga;
 
 #[cfg(target_os = "none")]
 use core::panic::PanicInfo;
