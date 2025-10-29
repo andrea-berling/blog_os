@@ -59,6 +59,8 @@ mov esp, 0x90000
 ; cdecl convention to pass parameters to main
 push dword [ExtensionsBitmap]
 push dword [EDDVersion]
+push dword KERNEL_SECTORS
+push dword STAGE2_SECTORS
 push dword DriveParameters
 call 0x0010000
 
@@ -106,6 +108,7 @@ BootDrive db 0
 align 4
 EDDVersion dd 0
 ExtensionsBitmap dd 0
+dw KERNEL_SECTORS
 align 2
 DriveParameters dw 66
 

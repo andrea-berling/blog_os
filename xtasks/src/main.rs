@@ -42,8 +42,58 @@ mod xtasks {
     }
 }
 
-fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
-    // Build stage2
+fn build_bootloader(
+    root_dir: &Path,
+    kernel_sectors: u64,
+    verbose: bool,
+) -> anyhow::Result<PathBuf> {
+    let stage2_path = build_stage2(root_dir, verbose)?;
+
+    let metadata = std::fs::metadata(&stage2_path)
+        .context("collecting info about the generated stage2 file")?;
+
+    // Build stage1 to read enough sectors to load stage2
+    let stage2_sectors = metadata.size().div_ceil(SECTOR_SIZE);
+
+    let stage1_path = build_stage1(root_dir, stage2_sectors, kernel_sectors)?;
+
+    let mut bootloader = std::fs::read(&stage1_path).context("reading stage1 bytes")?;
+    let mut stage2 = std::fs::read(&stage2_path).context("reading stage2 bytes")?;
+    stage2.resize((stage2_sectors * SECTOR_SIZE) as usize, 0);
+
+    bootloader.append(&mut stage2);
+    let bootloader_path = root_dir.join("bootloader.bin");
+
+    std::fs::write(&bootloader_path, bootloader).context("writing bootloader file")?;
+    Ok(bootloader_path)
+}
+
+fn build_stage1(
+    root_dir: &Path,
+    stage2_sectors: u64,
+    kernel_sectors: u64,
+) -> Result<PathBuf, anyhow::Error> {
+    let stage1_path = root_dir.join("stage1.bin");
+    let status = Command::new("nasm")
+        .args([
+            &format!("-DSTAGE2_SECTORS={stage2_sectors}"),
+            &format!("-DKERNEL_SECTORS={kernel_sectors}"),
+            "-fbin",
+            "-o",
+            &stage1_path.to_string_lossy(),
+            &root_dir
+                .join("bootloader/stage1/boot.asm")
+                .to_string_lossy(),
+        ])
+        .status()
+        .context("building stage1")?;
+    if !status.success() {
+        anyhow::bail!("building stage1 failed");
+    }
+    Ok(stage1_path)
+}
+
+fn build_stage2(root_dir: &Path, verbose: bool) -> Result<PathBuf, anyhow::Error> {
     let status = Command::new("cargo")
         .args(["+nightly", "bios", "--release"])
         .current_dir(root_dir.join("bootloader"))
@@ -52,9 +102,7 @@ fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("build stage2 failed");
     }
-
     let stage2_elf_path = root_dir.join("target/i686-bootloader/release/bootloader");
-
     if verbose {
         let status = Command::new("sh")
             .args([
@@ -92,12 +140,10 @@ fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
             anyhow::bail!("inspecting stage2 symbols failed");
         }
     }
-
     let stage2_path = stage2_elf_path
         .parent()
         .ok_or(anyhow::anyhow!("No parent for stage2 ELF?"))?
         .join("stage2.bin");
-
     let status = Command::new("objcopy")
         .args([
             "-O",
@@ -116,44 +162,20 @@ fn build_bootloader(root_dir: &Path, verbose: bool) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("extracting sections from ELF file to generate stage2 failed");
     }
+    Ok(stage2_path)
+}
 
-    let metadata = std::fs::metadata(&stage2_path)
-        .context("collecting info about the generated stage2 file")?;
-
-    // Build stage1 to read enough sectors to load stage2
-    let stage2_sectors = metadata.size().div_ceil(SECTOR_SIZE);
-
-    let stage1_path = root_dir.join("stage1.bin");
-
-    let status = Command::new("nasm")
-        .args([
-            &format!("-DSTAGE2_SECTORS={stage2_sectors}"),
-            "-fbin",
-            "-o",
-            &stage1_path.to_string_lossy(),
-            &root_dir
-                .join("bootloader/stage1/boot.asm")
-                .to_string_lossy(),
-        ])
+fn build_kernel(root_dir: &Path) -> anyhow::Result<PathBuf> {
+    let status = Command::new("cargo")
+        .args(["+nightly", "kernel", "--release"])
+        .current_dir(root_dir.join("kernel"))
         .status()
-        .context("building stage1")?;
+        .context("building the kernel")?;
     if !status.success() {
-        anyhow::bail!("building stage1 failed");
+        anyhow::bail!("building the kernel failed");
     }
-
-    let mut bootloader = std::fs::read(&stage1_path).context("reading stage1 bytes")?;
-    let mut stage2 = std::fs::read(&stage2_path).context("reading stage2 bytes")?;
-
-    bootloader.append(&mut stage2);
-    let bootloader_path = root_dir.join("bootloader.bin");
-
-    bootloader.resize(
-        bootloader.len().div_ceil(SECTOR_SIZE as usize) * SECTOR_SIZE as usize,
-        0,
-    );
-
-    std::fs::write(bootloader_path, bootloader).context("writing bootloader file")?;
-    Ok(())
+    let kernel_elf_path = root_dir.join("target/x86_64-blog_os/release/blog_os");
+    Ok(kernel_elf_path)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -163,7 +185,26 @@ fn main() -> anyhow::Result<()> {
         .context("canonicalising root dir")?;
 
     match cli.command() {
-        &xtasks::Command::BuildImage { verbose } => build_bootloader(&root_dir, verbose)?,
+        &xtasks::Command::BuildImage { verbose } => {
+            let kernel_path = build_kernel(&root_dir)?;
+
+            let metadata = std::fs::metadata(&kernel_path)
+                .context("collecting info about the generated kernel file")?;
+
+            // Build stage1 to read enough sectors to load stage2
+            let kernel_sectors = metadata.size().div_ceil(SECTOR_SIZE);
+            let bootloader_path = build_bootloader(&root_dir, kernel_sectors, verbose)?;
+
+            let mut image = std::fs::read(&bootloader_path).context("reading bootloader bytes")?;
+            let mut kernel = std::fs::read(&kernel_path).context("reading kernel bytes")?;
+            kernel.resize((kernel_sectors * SECTOR_SIZE) as usize, 0);
+
+            image.append(&mut kernel);
+            let image_path = root_dir.join("disk.img");
+
+            std::fs::write(&image_path, image).context("writing image file")?;
+            println!("Disk image built: {}", image_path.to_string_lossy());
+        }
     }
 
     Ok(())

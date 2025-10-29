@@ -14,6 +14,10 @@ mod error;
 #[cfg(target_os = "none")]
 use core::panic::PanicInfo;
 
+use common::{serial, vga};
+
+use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
+
 /// This function is called on panic.
 #[cfg(target_os = "none")]
 #[panic_handler]
@@ -28,21 +32,22 @@ fn panic(info: &PanicInfo) -> ! {
 //#[cfg(target_os = "none")]
 pub extern "C" fn start(
     drive_parameters_pointer: *const u8,
-    edd_version: u32,
-    extensions_bitmap: u32,
+    stage2_sectors: u32,
+    kernel_sectors: u32,
+    _edd_version: u32,
+    _extensions_bitmap: u32,
 ) -> ! {
     let mut vga_writer = vga::Writer::new();
-    vga_writer.write_string("Hello from stage2!\n");
+    writeln!(vga_writer, "Hello from stage2!").unwrap();
 
-    writeln!(vga_writer, "x = {drive_parameters_pointer:#x?}").unwrap();
-    writeln!(vga_writer, "edd_version = {edd_version:#x?}").unwrap();
-    writeln!(vga_writer, "extensions_bitmap = {extensions_bitmap:#x?}").unwrap();
+    let mut serial_writer = serial::Com1::get();
+    writeln!(serial_writer, "Hello from COM1!").unwrap();
 
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
     // buffer of 30 bytes containing the result
     let drive_parameters_bytes = unsafe {
-        core::ptr::slice_from_raw_parts(drive_parameters_pointer, 66)
+        core::ptr::slice_from_raw_parts(drive_parameters_pointer, DRIVE_PARAMETERS_BUFFER_SIZE)
             .as_ref()
             .unwrap()
     };
