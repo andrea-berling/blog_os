@@ -7,6 +7,7 @@ use crate::error::{self, Facility, InternalError, Kind, try_read_error};
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
 
+    #[cfg_attr(test, derive(Default, PartialEq, Eq))]
     #[derive(Debug, TryFromBytes)]
     #[repr(C)]
     pub(super) struct Elf32HeaderEntry {
@@ -22,6 +23,7 @@ mod inner {
         pub(super) entry_size: U32<LE>,
     }
 
+    #[cfg_attr(test, derive(Default, PartialEq, Eq))]
     #[derive(Debug, TryFromBytes)]
     #[repr(C)]
     pub(super) struct Elf64HeaderEntry {
@@ -130,6 +132,27 @@ impl HeaderEntry {
         }
     }
 
+    pub fn link(&self) -> u32 {
+        match self {
+            HeaderEntry::Elf32(entry) => entry.link.get(),
+            HeaderEntry::Elf64(entry) => entry.link.get(),
+        }
+    }
+
+    pub fn info(&self) -> u32 {
+        match self {
+            HeaderEntry::Elf32(entry) => entry.info.get(),
+            HeaderEntry::Elf64(entry) => entry.info.get(),
+        }
+    }
+
+    pub fn entry_size(&self) -> u64 {
+        match self {
+            HeaderEntry::Elf32(entry) => entry.entry_size.get() as u64,
+            HeaderEntry::Elf64(entry) => entry.entry_size.get(),
+        }
+    }
+
     pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> error::Result<Section<'b>>
     where
         'b: 'a,
@@ -179,6 +202,7 @@ impl HeaderEntry {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 #[repr(u32)]
 pub(crate) enum SectionEntryType {
@@ -267,7 +291,7 @@ impl Display for SectionEntryType {
     }
 }
 
-make_flags!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3);
+make_flags!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
 
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u32)]
@@ -391,5 +415,497 @@ impl<'a> StringTable<'a> {
         let endpoint = self.0[index..].iter().position(|&c| c == 0x0)?;
 
         Some(str::from_utf8(&self.0[index..][..endpoint]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::elf::{
+        error,
+        section::{
+            FlagType, Flags, HeaderEntry, SectionEntryType,
+            inner::{Elf32HeaderEntry, Elf64HeaderEntry},
+        },
+    };
+
+    const NULL_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const PROGBITS_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xe0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const NOTE_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x09, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xfc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const DYNSYM_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x2a, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x40, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x03, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x48, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const OS_SPECIFIC_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x32, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x6f, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x88, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0x09, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const STRING_TABLE_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x58, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x4c, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4c, 0x0b, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xfb, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const RELA_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x48, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x0f, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xa0, 0x6b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const RELA_PLT_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x6a, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xe8, 0x7a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe8, 0x7a, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x1b,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const RODATA_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x87, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x70, 0x7b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x7b, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xa0, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const TEXT_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0xb9, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x2c, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xc0, 0xec, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const GOT_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x0b, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x50, 0x6b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x4b, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xc8, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const BSS_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x3e, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x08, 0x8f, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x5f, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const SYMBOL_TABLE_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0xca, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3d, 0x4e, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xc0, 0xdb, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0xbd,
+        0x07, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_headers_64bit() {
+        let mut header = HeaderEntry::try_from_bytes(
+            &NULL_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(0, header.name_index());
+        assert_eq!(SectionEntryType::Null, header.r#type());
+        assert_eq!(Flags::empty(), header.flags());
+        assert_eq!(0x0, header.address());
+        assert_eq!(0x0, header.offset());
+        assert_eq!(0, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &PROGBITS_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(1, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0x2e0, header.address());
+        assert_eq!(0x2e0, header.offset());
+        assert_eq!(28, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x1, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &NOTE_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(9, header.name_index());
+        assert_eq!(SectionEntryType::Note, header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0x2fc, header.address());
+        assert_eq!(0x2fc, header.offset());
+        assert_eq!(32, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x4, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &DYNSYM_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(42, header.name_index());
+        assert_eq!(SectionEntryType::DynSym, header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0x340, header.address());
+        assert_eq!(0x340, header.offset());
+        assert_eq!(1608, header.size());
+        assert_eq!(8, header.link());
+        assert_eq!(1, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(24, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &OS_SPECIFIC_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(50, header.name_index());
+        assert_eq!(SectionEntryType::OsSpecific(0x6fffffff), header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0x988, header.address());
+        assert_eq!(0x988, header.offset());
+        assert_eq!(134, header.size());
+        assert_eq!(4, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x2, header.address_alignment());
+        assert_eq!(2, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &STRING_TABLE_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(88, header.name_index());
+        assert_eq!(SectionEntryType::Strtab, header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0xb4c, header.address());
+        assert_eq!(0xb4c, header.offset());
+        assert_eq!(1019, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x1, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &RELA_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(96, header.name_index());
+        assert_eq!(SectionEntryType::Rela, header.r#type());
+        assert_eq!(Flags::from(FlagType::Allocated), header.flags());
+        assert_eq!(0xf48, header.address());
+        assert_eq!(0xf48, header.offset());
+        assert_eq!(27552, header.size());
+        assert_eq!(4, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(24, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &RELA_PLT_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(106, header.name_index());
+        assert_eq!(SectionEntryType::Rela, header.r#type());
+        assert_eq!(FlagType::Allocated | FlagType::InfoLink, header.flags());
+        assert_eq!(0x7ae8, header.address());
+        assert_eq!(0x7ae8, header.offset());
+        assert_eq!(96, header.size());
+        assert_eq!(4, header.link());
+        assert_eq!(27, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(24, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &RODATA_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(135, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            FlagType::Allocated | FlagType::Merge | FlagType::Strings,
+            header.flags()
+        );
+        assert_eq!(0x7b70, header.address());
+        assert_eq!(0x7b70, header.offset());
+        assert_eq!(30880, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x10, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &TEXT_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(185, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            FlagType::Allocated | FlagType::ExecutableInstructions,
+            header.flags()
+        );
+        assert_eq!(0x22c00, header.address());
+        assert_eq!(0x21c00, header.offset());
+        assert_eq!(388288, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x10, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &GOT_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(267, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
+        assert_eq!(0x86b50, header.address());
+        assert_eq!(0x84b50, header.offset());
+        assert_eq!(2504, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &BSS_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(318, header.name_index());
+        assert_eq!(SectionEntryType::NoBits, header.r#type());
+        assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
+        assert_eq!(0x88f08, header.address());
+        assert_eq!(0x85f08, header.offset());
+        assert_eq!(200, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &SYMBOL_TABLE_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(458, header.name_index());
+        assert_eq!(SectionEntryType::Symtab, header.r#type());
+        assert_eq!(Flags::empty(), header.flags());
+        assert_eq!(0, header.address());
+        assert_eq!(0x4e3dd0, header.offset());
+        assert_eq!(56256, header.size());
+        assert_eq!(44, header.link());
+        assert_eq!(1981, header.info());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(24, header.entry_size());
+    }
+
+    const NULL_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const TEXT_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x10, 0x00, 0x00, 0x5d, 0x7d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const RODATA_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x60, 0x7d, 0x01,
+        0x00, 0x60, 0x8d, 0x00, 0x00, 0xcc, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const BSS_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x0f, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x30, 0x97, 0x01,
+        0x00, 0x30, 0xa7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const SYMBOL_TABLE_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x14, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x30, 0xa7, 0x00, 0x00, 0xc0, 0x0b, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x79, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    ];
+
+    const STRING_TABLE_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x1c, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xf0, 0xb2, 0x00, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_headers_32bit() {
+        let mut header = HeaderEntry::try_from_bytes(
+            &NULL_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(0, header.name_index());
+        assert_eq!(SectionEntryType::Null, header.r#type());
+        assert_eq!(Flags::empty(), header.flags());
+        assert_eq!(0x0, header.address());
+        assert_eq!(0x0, header.offset());
+        assert_eq!(0, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &TEXT_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(1, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            FlagType::Allocated | FlagType::ExecutableInstructions,
+            header.flags()
+        );
+        assert_eq!(0x10000, header.address());
+        assert_eq!(0x1000, header.offset());
+        assert_eq!(32093, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x10, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &RODATA_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(7, header.name_index());
+        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            FlagType::Allocated | FlagType::Merge | FlagType::Strings,
+            header.flags()
+        );
+        assert_eq!(0x17d60, header.address());
+        assert_eq!(0x8d60, header.offset());
+        assert_eq!(6604, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x10, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &BSS_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(15, header.name_index());
+        assert_eq!(SectionEntryType::NoBits, header.r#type());
+        assert_eq!(FlagType::Allocated | FlagType::Writeable, header.flags());
+        assert_eq!(0x19730, header.address());
+        assert_eq!(0xa730, header.offset());
+        assert_eq!(1, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x10, header.address_alignment());
+        assert_eq!(0, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &SYMBOL_TABLE_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(20, header.name_index());
+        assert_eq!(SectionEntryType::Symtab, header.r#type());
+        assert_eq!(Flags::empty(), header.flags());
+        assert_eq!(0x0, header.address());
+        assert_eq!(0xa730, header.offset());
+        assert_eq!(3008, header.size());
+        assert_eq!(6, header.link());
+        assert_eq!(121, header.info());
+        assert_eq!(0x4, header.address_alignment());
+        assert_eq!(16, header.entry_size());
+
+        header = HeaderEntry::try_from_bytes(
+            &STRING_TABLE_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            error::Facility::SectionHeader,
+        )
+        .unwrap();
+        assert_eq!(28, header.name_index());
+        assert_eq!(SectionEntryType::Strtab, header.r#type());
+        assert_eq!(Flags::empty(), header.flags());
+        assert_eq!(0x0, header.address());
+        assert_eq!(0xb2f0, header.offset());
+        assert_eq!(46, header.size());
+        assert_eq!(0, header.link());
+        assert_eq!(0, header.info());
+        assert_eq!(0x1, header.address_alignment());
+        assert_eq!(0, header.entry_size());
     }
 }

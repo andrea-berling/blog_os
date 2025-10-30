@@ -1,5 +1,7 @@
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html#elfid
 
+use crate::{elf::header::Header, error::Kind};
+
 pub mod error;
 pub mod header;
 pub mod program_header;
@@ -7,7 +9,6 @@ pub mod section;
 
 type Halfword = u16;
 type Word = u32;
-type Xword = u64;
 
 pub struct File<'a> {
     bytes: &'a [u8],
@@ -15,10 +16,21 @@ pub struct File<'a> {
 }
 
 impl<'a> File<'a> {
+    fn error(kind: Kind) -> crate::error::Error {
+        use crate::elf;
+        use crate::error;
+        use crate::error::InternalError;
+        error::Error::InternalError(InternalError::new(
+            error::Facility::Elf(elf::error::Facility::File),
+            kind,
+            error::Context::Parsing,
+        ))
+    }
+
     pub fn sections(&self) -> section::SectionHeaderEntries<'a> {
         let n_entries = self.header.section_header_entries();
-        // PANIC: shouldn't panic, for the Header conversion method from bytes fails already if the
-        // values for the section headers don't make sense
+
+        // PANIC: the size of the ELF file was validate in the new method
         section::SectionHeaderEntries::new(
             &self.bytes[self.header.section_header_offset() as usize..]
                 [..(self.header.section_header_entry_size() * n_entries) as usize],
@@ -30,8 +42,8 @@ impl<'a> File<'a> {
 
     pub fn program_headers(&self) -> program_header::ProgramHeaderEntries<'a> {
         let n_entries = self.header.program_header_entries();
-        // PANIC: shouldn't panic, for the Header conversion method from bytes fails already if the
-        // values for the section headers don't make sense
+
+        // PANIC: the size of the ELF file was validate in the new method
         program_header::ProgramHeaderEntries::new(
             &self.bytes[self.header.program_header_offset() as usize..]
                 [..(self.header.program_header_entry_size() * n_entries) as usize],
@@ -44,7 +56,7 @@ impl<'a> File<'a> {
     pub fn get_section_by_index(
         &self,
         index: usize,
-    ) -> Option<crate::error::Result<section::Section>> {
+    ) -> Option<crate::error::Result<section::Section<'_>>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
@@ -81,6 +93,32 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
     type Error = crate::error::Error;
 
     fn try_from(bytes: &'a [u8]) -> core::result::Result<Self, Self::Error> {
+        let result = Self {
+            bytes,
+            header: bytes.try_into()?,
+        };
+
+        use crate::error::Kind::*;
+
+        if result.bytes.len() < result.header.section_header_offset() as usize
+            || result.bytes.len()
+                < (result.header.section_header_offset()
+                    + (result.header.section_header_entry_size()
+                        * result.header.section_header_entries()) as u64) as usize
+        {
+            return Err(Self::error(CantFit("section header")));
+        }
+
+        if result.bytes.len() < result.header.program_header_offset() as usize
+            || result.bytes.len()
+                < (result.header.program_header_offset()
+                    + (result.header.program_header_entry_size()
+                        * result.header.program_header_entries()) as u64) as usize
+        {
+            use crate::error::Kind::*;
+            return Err(Self::error(CantFit("program header")));
+        }
+
         Ok(Self {
             bytes,
             header: bytes.try_into()?,

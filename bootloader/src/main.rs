@@ -43,6 +43,9 @@ pub extern "C" fn start(
     let mut serial_writer = serial::Com1::get();
     writeln!(serial_writer, "Hello from COM1!").unwrap();
 
+    writeln!(vga_writer, "stage2_sectors: {stage2_sectors}").unwrap();
+    writeln!(vga_writer, "kernel_sectors: {kernel_sectors}").unwrap();
+
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
     // buffer of 30 bytes containing the result
@@ -52,14 +55,14 @@ pub extern "C" fn start(
             .unwrap()
     };
 
+    writeln!(vga_writer, "{drive_parameters_bytes:x?}").unwrap();
+    writeln!(serial_writer, "{drive_parameters_bytes:#x?}").unwrap();
+
     let drive_parameters = edd::DriveParameters::from_bytes(drive_parameters_bytes, true)
         .inspect_err(|err| {
             writeln!(vga_writer, "{err:#}").unwrap();
         })
         .unwrap();
-
-    writeln!(vga_writer, "{:x?}", drive_parameters_bytes).unwrap();
-    writeln!(vga_writer, "{}", drive_parameters).unwrap();
 
     loop {}
 }

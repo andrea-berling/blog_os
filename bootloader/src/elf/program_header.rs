@@ -4,7 +4,7 @@ use crate::elf::{
     header,
 };
 
-use crate::error::{InternalError, Kind, Reason, try_read_error};
+use crate::error::{Kind, Reason, try_read_error};
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -36,6 +36,27 @@ mod inner {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u8)]
+pub enum PermissionFlag {
+    Executable = 0x1,
+    Writable = 0x2,
+    Readable = 0x4,
+}
+
+impl core::fmt::Display for PermissionFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PermissionFlag::Executable => write!(f, "EXECUTABLE"),
+            PermissionFlag::Writable => write!(f, "WRITABLE"),
+            PermissionFlag::Readable => write!(f, "READABLE"),
+        }
+    }
+}
+
+make_flags!(new_type: Permissions, underlying_flag_type: PermissionFlag, repr: u8, bit_skipper: |i| i > 2);
+
 pub const ELF32_ENTRY_SIZE: usize = size_of::<inner::Elf32HeaderEntry>();
 pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
 
@@ -65,10 +86,20 @@ impl HeaderEntry {
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
-                    match ProgramHeaderEntryType::try_from(type_halfword) {
-                        Ok(_) => Ok(header_entry),
-                        Err(err) => Err(Self::error(CantReadField("type", err), facility)),
+                    if let Err(err) = ProgramHeaderEntryType::try_from(type_halfword) {
+                        return Err(Self::error(CantReadField("type", err), facility));
                     }
+
+                    let flags_word = header_entry.flags.get();
+
+                    if flags_word > 7 {
+                        return Err(Self::error(
+                            CantReadField("type", Reason::InvalidValue(flags_word.into())),
+                            facility,
+                        ));
+                    }
+
+                    Ok(header_entry)
                 })
                 .map(HeaderEntry::Elf32),
 
@@ -125,6 +156,26 @@ impl HeaderEntry {
         }
     }
 
+    pub fn segment_size_on_file(&self) -> u64 {
+        match self {
+            HeaderEntry::Elf32(elf32_header_entry) => {
+                elf32_header_entry.segment_size_on_file.get() as u64
+            }
+            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.segment_size_on_file.get(),
+        }
+    }
+
+    pub fn segment_size_in_memory(&self) -> u64 {
+        match self {
+            HeaderEntry::Elf32(elf32_header_entry) => {
+                elf32_header_entry.segment_size_in_memory.get() as u64
+            }
+            HeaderEntry::Elf64(elf64_header_entry) => {
+                elf64_header_entry.segment_size_in_memory.get()
+            }
+        }
+    }
+
     pub fn physical_address(&self) -> u64 {
         match self {
             HeaderEntry::Elf32(elf32_header_entry) => {
@@ -161,6 +212,13 @@ impl HeaderEntry {
         }
     }
 
+    pub fn permissions(&self) -> Permissions {
+        Permissions(match self {
+            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get() as u8,
+            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get() as u8,
+        })
+    }
+
     pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> crate::error::Result<()> {
         writeln!(writer, "Type: {}", self.r#type())?;
         writeln!(writer, "Offset: {:#x}", self.offset())?;
@@ -169,10 +227,12 @@ impl HeaderEntry {
         writeln!(writer, "Size on file: {}", self.on_file_size())?;
         writeln!(writer, "Size in memory: {}", self.in_memory_size())?;
         writeln!(writer, "Address Alignment: {:#x}", self.address_alignment())?;
+        writeln!(writer, "Permissions: {}", self.permissions())?;
         Ok(())
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 #[repr(u32)]
 pub enum ProgramHeaderEntryType {
@@ -233,6 +293,8 @@ pub(crate) struct ProgramHeaderEntries<'a> {
     bytes_read_so_far: usize,
 }
 use crate::error::Kind::*;
+use common::make_flags;
+use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
 
 impl<'a> ProgramHeaderEntries<'a> {
@@ -288,5 +350,251 @@ impl<'a> Iterator for ProgramHeaderEntries<'a> {
                 self.bytes_read_so_far += entry_size;
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::elf::{
+        self,
+        program_header::{
+            HeaderEntry, PermissionFlag, Permissions, ProgramHeaderEntryType,
+            inner::{Elf32HeaderEntry, Elf64HeaderEntry},
+        },
+    };
+
+    const PHDR_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x06, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xa0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const INTERPRETER_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xe0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xe0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const PT_LOAD_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x2c, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x40, 0xed, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0xed, 0x05, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const TLS_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x07, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x40, 0x09, 0x08, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x40, 0x29, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x29, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const DYNAMIC_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x80, 0x49, 0x08, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x80, 0x69, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x69, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xd0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const PROCESSOR_SPECIFIC_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x52, 0xe5, 0x74, 0x64, 0x04, 0x00, 0x00, 0x00, 0x40, 0x09, 0x08, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x40, 0x29, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x29, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x4c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x56, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    const NOTE_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
+        0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xfc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xfc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_headers_64bit() {
+        let mut header = HeaderEntry::try_from_bytes(
+            &PHDR_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::ProgramHeader, header.r#type());
+        assert_eq!(0x40, header.offset());
+        assert_eq!(0x40, header.virtual_address());
+        assert_eq!(0x40, header.physical_address());
+        assert_eq!(672, header.segment_size_on_file());
+        assert_eq!(672, header.segment_size_in_memory());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(
+            Permissions::from(PermissionFlag::Readable),
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &INTERPRETER_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::Interpreter, header.r#type());
+        assert_eq!(0x2e0, header.offset());
+        assert_eq!(0x2e0, header.virtual_address());
+        assert_eq!(0x2e0, header.physical_address());
+        assert_eq!(28, header.segment_size_on_file());
+        assert_eq!(28, header.segment_size_in_memory());
+        assert_eq!(0x1, header.address_alignment());
+        assert_eq!(
+            Permissions::from(PermissionFlag::Readable),
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &PT_LOAD_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
+        assert_eq!(0x21c00, header.offset());
+        assert_eq!(0x22c00, header.virtual_address());
+        assert_eq!(0x22c00, header.physical_address());
+        assert_eq!(388416, header.segment_size_on_file());
+        assert_eq!(388416, header.segment_size_in_memory());
+        assert_eq!(0x1000, header.address_alignment());
+        assert_eq!(
+            PermissionFlag::Readable | PermissionFlag::Executable,
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &TLS_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::ThreadLocalStorage, header.r#type());
+        assert_eq!(0x80940, header.offset());
+        assert_eq!(0x82940, header.virtual_address());
+        assert_eq!(0x82940, header.physical_address());
+        assert_eq!(32, header.segment_size_on_file());
+        assert_eq!(80, header.segment_size_in_memory());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(
+            Permissions::from(PermissionFlag::Readable),
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &DYNAMIC_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::Dynamic, header.r#type());
+        assert_eq!(0x84980, header.offset());
+        assert_eq!(0x86980, header.virtual_address());
+        assert_eq!(0x86980, header.physical_address());
+        assert_eq!(464, header.segment_size_on_file());
+        assert_eq!(464, header.segment_size_in_memory());
+        assert_eq!(0x8, header.address_alignment());
+        assert_eq!(
+            PermissionFlag::Writable | PermissionFlag::Readable,
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &PROCESSOR_SPECIFIC_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(
+            ProgramHeaderEntryType::ProcessorSpecific(0x6474e552),
+            header.r#type()
+        );
+        assert_eq!(0x80940, header.offset());
+        assert_eq!(0x82940, header.virtual_address());
+        assert_eq!(0x82940, header.physical_address());
+        assert_eq!(19472, header.segment_size_on_file());
+        assert_eq!(22208, header.segment_size_in_memory());
+        assert_eq!(0x1, header.address_alignment());
+        assert_eq!(
+            Permissions::from(PermissionFlag::Readable),
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &NOTE_HEADER_64_BIT[..],
+            crate::elf::header::Class::Elf64,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::Note, header.r#type());
+        assert_eq!(0x2fc, header.offset());
+        assert_eq!(0x2fc, header.virtual_address());
+        assert_eq!(0x2fc, header.physical_address());
+        assert_eq!(68, header.segment_size_on_file());
+        assert_eq!(68, header.segment_size_in_memory());
+        assert_eq!(0x4, header.address_alignment());
+        assert_eq!(
+            Permissions::from(PermissionFlag::Readable),
+            header.permissions()
+        )
+    }
+
+    const PT_LOAD_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x5d, 0x7d, 0x00, 0x00, 0x5d, 0x7d, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x10,
+        0x00, 0x00,
+    ];
+
+    const PROCESSOR_SPECIFIC_HEADER_32_BIT: [u8; size_of::<Elf32HeaderEntry>()] = [
+        0x51, 0xe5, 0x74, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_headers_32bit() {
+        let mut header = HeaderEntry::try_from_bytes(
+            &PT_LOAD_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
+        assert_eq!(0x1000, header.offset());
+        assert_eq!(0x10000, header.virtual_address());
+        assert_eq!(0x10000, header.physical_address());
+        assert_eq!(32093, header.segment_size_on_file());
+        assert_eq!(32093, header.segment_size_in_memory());
+        assert_eq!(0x1000, header.address_alignment());
+        assert_eq!(
+            PermissionFlag::Readable | PermissionFlag::Executable,
+            header.permissions()
+        );
+
+        header = HeaderEntry::try_from_bytes(
+            &PROCESSOR_SPECIFIC_HEADER_32_BIT[..],
+            crate::elf::header::Class::Elf32,
+            elf::error::Facility::ProgramHeader,
+        )
+        .unwrap();
+        assert_eq!(
+            ProgramHeaderEntryType::ProcessorSpecific(0x6474e551),
+            header.r#type()
+        );
+        assert_eq!(0x0, header.offset());
+        assert_eq!(0x0, header.virtual_address());
+        assert_eq!(0x0, header.physical_address());
+        assert_eq!(0, header.segment_size_on_file());
+        assert_eq!(0, header.segment_size_in_memory());
+        assert_eq!(0x0, header.address_alignment());
+        assert_eq!(
+            PermissionFlag::Writable | PermissionFlag::Readable,
+            header.permissions()
+        );
     }
 }

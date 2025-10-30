@@ -26,6 +26,7 @@ mod inner {
     pub(super) const HEADER_SIZE: [usize; 3] =
         [0, size_of::<Elf32Header>(), size_of::<Elf64Header>()];
 
+    #[cfg_attr(test, derive(Default, PartialEq, Eq))]
     #[derive(Debug, TryFromBytes)]
     pub(super) struct Elf32Header {
         pub(super) identifier: ElfIdentifier,
@@ -44,6 +45,7 @@ mod inner {
         pub(super) string_table_index: U16<LE>,
     }
 
+    #[cfg_attr(test, derive(Default, PartialEq, Eq))]
     #[derive(Debug, TryFromBytes)]
     pub(super) struct Elf64Header {
         pub(super) identifier: ElfIdentifier,
@@ -63,10 +65,12 @@ mod inner {
     }
 }
 
+#[cfg_attr(test, derive(Default))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromBytes)]
 #[repr(u8)]
 #[allow(unused)]
 pub(crate) enum Encoding {
+    #[cfg_attr(test, default)]
     LittleEndian = 1,
     BigEndian = 2,
 }
@@ -80,9 +84,11 @@ impl Display for Encoding {
     }
 }
 
+#[cfg_attr(test, derive(Default, PartialEq, Eq))]
 #[derive(Debug, Clone, Copy, TryFromBytes, TryFromPrimitive)]
 #[repr(u8)]
 pub(crate) enum Class {
+    #[cfg_attr(test, default)]
     Elf32 = 1,
     Elf64 = 2,
 }
@@ -168,6 +174,7 @@ impl TryFrom<Halfword> for ObjectType {
     }
 }
 
+#[cfg_attr(test, derive(Default, PartialEq, Eq))]
 #[derive(Debug, TryFromBytes)]
 #[repr(C)]
 struct ElfIdentifier {
@@ -269,34 +276,10 @@ enum Machine {
     ST200 = 100,
 }
 
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum Header {
     Elf32(inner::Elf32Header),
     Elf64(inner::Elf64Header),
-}
-
-impl core::fmt::Debug for Header {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Header")
-            .field("class", &self.class())
-            .field("encoding", &self.encoding())
-            .field("version", &self.version())
-            .field("entrypoint", &self.entrypoint())
-            .field("size", &self.size())
-            .field("program_header_offset", &self.program_header_offset())
-            .field(
-                "program_header_entry_size",
-                &self.program_header_entry_size(),
-            )
-            .field("program_header_entries", &self.program_header_entries())
-            .field("section_header_offset", &self.section_header_offset())
-            .field(
-                "section_header_entry_size",
-                &self.section_header_entry_size(),
-            )
-            .field("section_header_entries", &self.section_header_entries())
-            .field("string_table_index", &self.string_table_index())
-            .finish()
-    }
 }
 
 impl TryFrom<&[u8]> for Header {
@@ -359,15 +342,6 @@ impl TryFrom<&[u8]> for Header {
             )));
         }
 
-        if bytes.len() < elf_header.program_header_offset() as usize
-            || bytes.len()
-                < (elf_header.program_header_offset()
-                    + (elf_header.program_header_entry_size() * elf_header.program_header_entries())
-                        as u64) as usize
-        {
-            return Err(Self::error(CantFit("program header")));
-        }
-
         if elf_header.program_header_entry_size() as usize
             != (match elf_identifier.class {
                 Class::Elf32 => program_header::ELF32_ENTRY_SIZE,
@@ -378,15 +352,6 @@ impl TryFrom<&[u8]> for Header {
                 "phentsize",
                 InvalidValue(elf_header.section_header_entry_size().into()),
             )));
-        }
-
-        if bytes.len() < elf_header.section_header_offset() as usize
-            || bytes.len()
-                < (elf_header.section_header_offset()
-                    + (elf_header.section_header_entry_size() * elf_header.section_header_entries())
-                        as u64) as usize
-        {
-            return Err(Self::error(CantFit("section header")));
         }
 
         if elf_header.section_header_entry_size() as usize
@@ -578,5 +543,93 @@ impl Header {
         writeln!(writer, "String table index: {}", self.string_table_index())?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zerocopy::{U16, U32, U64};
+
+    use crate::elf::header::{
+        ElfIdentifier, Header, Machine, ObjectType, Version,
+        inner::{Elf32Header, Elf64Header},
+    };
+
+    const _32_BIT_BOOTLOADER_HEADER: [u8; size_of::<Elf32Header>()] = [
+        0x7f, 0x45, 0x4c, 0x46, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x34, 0x00,
+        0x00, 0x00, 0x08, 0xe4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x34, 0x00, 0x20, 0x00, 0x04,
+        0x00, 0x28, 0x00, 0x07, 0x00, 0x05, 0x00,
+    ];
+
+    const _64_BIT_HEADER: [u8; size_of::<Elf64Header>()] = [
+        0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x03, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0xfd, 0x51, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x0c, 0x00, 0x40, 0x00,
+        0x2d, 0x00, 0x2b, 0x00,
+    ];
+
+    #[test]
+    fn test_header() {
+        let header = Header::try_from(&_32_BIT_BOOTLOADER_HEADER[..]).unwrap();
+        assert_eq!(
+            Header::Elf32(Elf32Header {
+                identifier: ElfIdentifier {
+                    magic: *b"\x7fELF",
+                    class: crate::elf::header::Class::Elf32,
+                    encoding: crate::elf::header::Encoding::LittleEndian,
+                    version: 1,
+                    os_abi: 0,
+                    os_abiversion: 0,
+                    os_pad: [0, 0, 0, 0, 0, 0],
+                    nident: 0
+                },
+                r#type: U16::new(ObjectType::Executable as u16),
+                machine: U16::new(Machine::I386 as u16),
+                version: U32::new(Version::Current as u32),
+                entrypoint: U32::new(0x10000),
+                program_header_offset: U32::new(52),
+                section_header_offset: U32::new(58376),
+                flags: U32::new(0),
+                size: U16::new(52),
+                program_header_entry_size: U16::new(32),
+                program_header_entries: U16::new(4),
+                section_header_entry_size: U16::new(40),
+                section_header_entries: U16::new(7),
+                string_table_index: U16::new(5)
+            }),
+            header
+        );
+
+        let header = Header::try_from(&_64_BIT_HEADER[..]).unwrap();
+        assert_eq!(
+            Header::Elf64(Elf64Header {
+                identifier: ElfIdentifier {
+                    magic: *b"\x7fELF",
+                    class: crate::elf::header::Class::Elf64,
+                    encoding: crate::elf::header::Encoding::LittleEndian,
+                    version: 1,
+                    os_abi: 0,
+                    os_abiversion: 0,
+                    os_pad: [0, 0, 0, 0, 0, 0],
+                    nident: 0
+                },
+                r#type: U16::new(ObjectType::Dynamic as u16),
+                machine: U16::new(Machine::X86_64 as u16),
+                version: U32::new(Version::Current as u32),
+                entrypoint: U64::new(142336),
+                program_header_offset: U64::new(64),
+                section_header_offset: U64::new(5373376),
+                flags: U32::new(0),
+                size: U16::new(64),
+                program_header_entry_size: U16::new(56),
+                program_header_entries: U16::new(12),
+                section_header_entry_size: U16::new(64),
+                section_header_entries: U16::new(45),
+                string_table_index: U16::new(43)
+            }),
+            header
+        );
     }
 }

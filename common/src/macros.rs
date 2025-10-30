@@ -5,6 +5,7 @@ macro_rules! make_flags {
 
         impl ::core::fmt::Display for $flags_type {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut printed_once = false;
                 for i in 0..<$flag_unsigned_type>::BITS {
                     if false $(|| $skip_bit(i) )? {
                         continue;
@@ -12,10 +13,11 @@ macro_rules! make_flags {
                     // PANIC: no panics, values have been purposedly chose not to
                     let flag = <$flag_type>::try_from(1 << i).unwrap();
                     if self.is_set(flag) {
-                        if i > 1 {
+                        if printed_once {
                             write!(f, "|")?;
                         }
                         write!(f, "{}", flag)?;
+                        printed_once = true;
                     }
                 }
                 Ok(())
