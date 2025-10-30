@@ -46,16 +46,19 @@ mod inner {
         pub(super) address_alignment: U64<LE>,
         pub(super) entry_size: U64<LE>,
     }
+
+    #[derive(Debug)]
+    pub(super) enum HeaderEntry {
+        Elf32(Elf32HeaderEntry),
+        Elf64(Elf64HeaderEntry),
+    }
 }
 
 pub const ELF32_ENTRY_SIZE: usize = size_of::<inner::Elf32HeaderEntry>();
 pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
 
 #[derive(Debug)]
-pub enum HeaderEntry {
-    Elf32(inner::Elf32HeaderEntry),
-    Elf64(inner::Elf64HeaderEntry),
-}
+pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
     fn error(kind: Kind, facility: Facility) -> Error {
@@ -78,7 +81,8 @@ impl HeaderEntry {
                         Err(err) => Err(Self::error(CantReadField("type", err), facility)),
                     }
                 })
-                .map(HeaderEntry::Elf32),
+                .map(inner::HeaderEntry::Elf32)
+                .map(HeaderEntry),
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
                 .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
@@ -89,71 +93,72 @@ impl HeaderEntry {
                         Err(err) => Err(Self::error(CantReadField("type", err), facility)),
                     }
                 })
-                .map(HeaderEntry::Elf64),
+                .map(inner::HeaderEntry::Elf64)
+                .map(HeaderEntry),
         }
     }
 
     pub fn name_index(&self) -> Word {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.name_index.get(),
-            HeaderEntry::Elf64(entry) => entry.name_index.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.name_index.get(),
+            inner::HeaderEntry::Elf64(entry) => entry.name_index.get(),
         }
     }
 
     pub fn r#type(&self) -> SectionEntryType {
         // PANIC: shouldn't panic, we check the type as soon as the entry is created
-        match self {
-            HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().unwrap(),
-            HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().unwrap(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().unwrap(),
+            inner::HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().unwrap(),
         }
     }
 
     pub fn address(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.address.get() as u64,
-            HeaderEntry::Elf64(entry) => entry.address.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.address.get() as u64,
+            inner::HeaderEntry::Elf64(entry) => entry.address.get(),
         }
     }
 
     pub fn offset(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.offset.get() as u64,
-            HeaderEntry::Elf64(entry) => entry.offset.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.offset.get() as u64,
+            inner::HeaderEntry::Elf64(entry) => entry.offset.get(),
         }
     }
 
     pub fn address_alignment(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.address_alignment.get() as u64,
-            HeaderEntry::Elf64(entry) => entry.address_alignment.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.address_alignment.get() as u64,
+            inner::HeaderEntry::Elf64(entry) => entry.address_alignment.get(),
         }
     }
 
     pub fn size(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.size.get() as u64,
-            HeaderEntry::Elf64(entry) => entry.size.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.size.get() as u64,
+            inner::HeaderEntry::Elf64(entry) => entry.size.get(),
         }
     }
 
     pub fn link(&self) -> u32 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.link.get(),
-            HeaderEntry::Elf64(entry) => entry.link.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.link.get(),
+            inner::HeaderEntry::Elf64(entry) => entry.link.get(),
         }
     }
 
     pub fn info(&self) -> u32 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.info.get(),
-            HeaderEntry::Elf64(entry) => entry.info.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.info.get(),
+            inner::HeaderEntry::Elf64(entry) => entry.info.get(),
         }
     }
 
     pub fn entry_size(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(entry) => entry.entry_size.get() as u64,
-            HeaderEntry::Elf64(entry) => entry.entry_size.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(entry) => entry.entry_size.get() as u64,
+            inner::HeaderEntry::Elf64(entry) => entry.entry_size.get(),
         }
     }
 
@@ -186,9 +191,9 @@ impl HeaderEntry {
     }
 
     pub fn flags(&self) -> Flags {
-        Flags(match self {
-            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get().into(),
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get(),
+        Flags(match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get().into(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get(),
         })
     }
 

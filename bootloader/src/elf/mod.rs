@@ -1,7 +1,6 @@
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html#elfid
 
 use crate::elf::error::Facility;
-use crate::elf::header::Header;
 
 mod error;
 pub mod header;
@@ -12,10 +11,7 @@ use common::error::Context;
 use common::error::InternalError;
 use common::error::Kind;
 use common::error::Kind::*;
-use common::error::Reason;
-use common::error::Reason::*;
 use common::error::Result;
-use common::error::try_read_error;
 use error::Error;
 
 type Halfword = u16;

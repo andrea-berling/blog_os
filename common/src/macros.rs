@@ -28,6 +28,7 @@ macro_rules! make_flags {
         #[derive(Debug, Default, PartialEq, Eq)]
         pub struct $flags_type($flag_unsigned_type);
 
+        #[allow(unused)]
         impl $flags_type {
             fn empty() -> Self {
                 $flags_type(0)

@@ -22,7 +22,7 @@ use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let mut vga_writer = vga::Writer::new();
-    writeln!(vga_writer, "{info:#?}");
+    writeln!(vga_writer, "{info:#?}").unwrap();
     loop {}
 }
 

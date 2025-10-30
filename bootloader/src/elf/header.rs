@@ -66,6 +66,12 @@ mod inner {
         pub(super) section_header_entries: U16<LE>,
         pub(super) string_table_index: U16<LE>,
     }
+
+    #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+    pub(super) enum Header {
+        Elf32(Elf32Header),
+        Elf64(Elf64Header),
+    }
 }
 
 #[cfg_attr(test, derive(Default))]
@@ -280,10 +286,7 @@ enum Machine {
 }
 
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
-pub enum Header {
-    Elf32(inner::Elf32Header),
-    Elf64(inner::Elf64Header),
-}
+pub struct Header(inner::Header);
 
 impl TryFrom<&[u8]> for Header {
     type Error = Error;
@@ -303,22 +306,22 @@ impl TryFrom<&[u8]> for Header {
             return Err(Self::error(Generic(UnsupportedEndianness)));
         }
 
-        let elf_header = match elf_identifier.class {
-            Class::Elf32 => Header::Elf32(
+        let elf_header = Header(match elf_identifier.class {
+            Class::Elf32 => inner::Header::Elf32(
                 inner::Elf32Header::try_read_from_prefix(bytes)
                     .map_err(Self::try_read_error)?
                     .0,
             ),
-            Class::Elf64 => Header::Elf64(
+            Class::Elf64 => inner::Header::Elf64(
                 inner::Elf64Header::try_read_from_prefix(bytes)
                     .map_err(Self::try_read_error)?
                     .0,
             ),
-        };
+        });
 
-        let type_halfword = match &elf_header {
-            Header::Elf32(elf32_header) => elf32_header.r#type.get(),
-            Header::Elf64(elf64_header) => elf64_header.r#type.get(),
+        let type_halfword = match &elf_header.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.r#type.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.r#type.get(),
         };
 
         let _ = ObjectType::try_from(type_halfword)
@@ -380,101 +383,101 @@ impl Header {
     }
 
     fn size(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.size.get(),
-            Header::Elf64(elf64_header) => elf64_header.size.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.size.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.size.get(),
         }
     }
 
     pub fn class(&self) -> Class {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.identifier.class,
-            Header::Elf64(elf64_header) => elf64_header.identifier.class,
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.identifier.class,
+            inner::Header::Elf64(elf64_header) => elf64_header.identifier.class,
         }
     }
 
     pub fn program_header_offset(&self) -> u64 {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.program_header_offset.get().into(),
-            Header::Elf64(elf64_header) => elf64_header.program_header_offset.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.program_header_offset.get().into(),
+            inner::Header::Elf64(elf64_header) => elf64_header.program_header_offset.get(),
         }
     }
 
     pub fn program_header_entry_size(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.program_header_entry_size.get(),
-            Header::Elf64(elf64_header) => elf64_header.program_header_entry_size.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.program_header_entry_size.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.program_header_entry_size.get(),
         }
     }
 
     pub fn program_header_entries(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.program_header_entries.get(),
-            Header::Elf64(elf64_header) => elf64_header.program_header_entries.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.program_header_entries.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.program_header_entries.get(),
         }
     }
 
     pub fn section_header_offset(&self) -> u64 {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.section_header_offset.get().into(),
-            Header::Elf64(elf64_header) => elf64_header.section_header_offset.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.section_header_offset.get().into(),
+            inner::Header::Elf64(elf64_header) => elf64_header.section_header_offset.get(),
         }
     }
 
     pub fn section_header_entry_size(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.section_header_entry_size.get(),
-            Header::Elf64(elf64_header) => elf64_header.section_header_entry_size.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.section_header_entry_size.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.section_header_entry_size.get(),
         }
     }
 
     pub fn section_header_entries(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.section_header_entries.get(),
-            Header::Elf64(elf64_header) => elf64_header.section_header_entries.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.section_header_entries.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.section_header_entries.get(),
         }
     }
 
     fn magic(&self) -> [u8; 4] {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.identifier.magic,
-            Header::Elf64(elf64_header) => elf64_header.identifier.magic,
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.identifier.magic,
+            inner::Header::Elf64(elf64_header) => elf64_header.identifier.magic,
         }
     }
 
     fn encoding(&self) -> Encoding {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.identifier.encoding,
-            Header::Elf64(elf64_header) => elf64_header.identifier.encoding,
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.identifier.encoding,
+            inner::Header::Elf64(elf64_header) => elf64_header.identifier.encoding,
         }
     }
 
     fn version(&self) -> Version {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.version.get().into(),
-            Header::Elf64(elf64_header) => elf64_header.version.get().into(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.version.get().into(),
+            inner::Header::Elf64(elf64_header) => elf64_header.version.get().into(),
         }
     }
 
     fn entrypoint(&self) -> u64 {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.entrypoint.get() as u64,
-            Header::Elf64(elf64_header) => elf64_header.entrypoint.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.entrypoint.get() as u64,
+            inner::Header::Elf64(elf64_header) => elf64_header.entrypoint.get(),
         }
     }
 
     pub fn string_table_index(&self) -> Halfword {
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.string_table_index.get(),
-            Header::Elf64(elf64_header) => elf64_header.string_table_index.get(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.string_table_index.get(),
+            inner::Header::Elf64(elf64_header) => elf64_header.string_table_index.get(),
         }
     }
 
     pub fn r#type(&self) -> ObjectType {
         // PANIC: shouldn't panic for we checked the type in the new method
-        match &self {
-            Header::Elf32(elf32_header) => elf32_header.r#type.get().try_into().unwrap(),
-            Header::Elf64(elf64_header) => elf64_header.r#type.get().try_into().unwrap(),
+        match &self.0 {
+            inner::Header::Elf32(elf32_header) => elf32_header.r#type.get().try_into().unwrap(),
+            inner::Header::Elf64(elf64_header) => elf64_header.r#type.get().try_into().unwrap(),
         }
     }
 
@@ -545,7 +548,7 @@ mod tests {
 
     use crate::elf::header::{
         ElfIdentifier, Header, Machine, ObjectType, Version,
-        inner::{Elf32Header, Elf64Header},
+        inner::{self, Elf32Header, Elf64Header},
     };
 
     const _32_BIT_BOOTLOADER_HEADER: [u8; size_of::<Elf32Header>()] = [
@@ -567,7 +570,7 @@ mod tests {
     fn test_header() {
         let header = Header::try_from(&_32_BIT_BOOTLOADER_HEADER[..]).unwrap();
         assert_eq!(
-            Header::Elf32(Elf32Header {
+            Header(inner::Header::Elf32(Elf32Header {
                 identifier: ElfIdentifier {
                     magic: *b"\x7fELF",
                     class: crate::elf::header::Class::Elf32,
@@ -591,13 +594,13 @@ mod tests {
                 section_header_entry_size: U16::new(40),
                 section_header_entries: U16::new(7),
                 string_table_index: U16::new(5)
-            }),
+            })),
             header
         );
 
         let header = Header::try_from(&_64_BIT_HEADER[..]).unwrap();
         assert_eq!(
-            Header::Elf64(Elf64Header {
+            Header(inner::Header::Elf64(Elf64Header {
                 identifier: ElfIdentifier {
                     magic: *b"\x7fELF",
                     class: crate::elf::header::Class::Elf64,
@@ -621,7 +624,7 @@ mod tests {
                 section_header_entry_size: U16::new(64),
                 section_header_entries: U16::new(45),
                 string_table_index: U16::new(43)
-            }),
+            })),
             header
         );
     }

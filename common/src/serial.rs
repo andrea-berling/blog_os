@@ -8,6 +8,7 @@ pub struct Com1;
 
 static mut COM1_INITIALIZED: bool = false;
 
+#[allow(unused)]
 #[repr(u8)]
 enum InterruptEnableFlag {
     ReceivedDataAvailable = 0x1,
@@ -18,6 +19,7 @@ enum InterruptEnableFlag {
 
 make_flags!(new_type: InterruptEnableFlags, underlying_flag_type: InterruptEnableFlag, repr: u8, nodisplay);
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum LineControlRegisterFlag {
@@ -33,6 +35,7 @@ enum LineControlRegisterFlag {
 
 make_flags!(new_type: LineControlRegisterFlags, underlying_flag_type: LineControlRegisterFlag, repr: u8, nodisplay);
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum FifoControlRegisterFlag {
@@ -44,6 +47,7 @@ enum FifoControlRegisterFlag {
     InterruptTriggerLevel2 = 1 << 7,
 }
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum ModemControlRegisterFlag {
@@ -56,6 +60,7 @@ enum ModemControlRegisterFlag {
 
 make_flags!(new_type: ModemControlRegisterFlags, underlying_flag_type: ModemControlRegisterFlag, repr: u8, nodisplay);
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum LineStatusRegisterFlag {

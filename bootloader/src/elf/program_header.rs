@@ -41,6 +41,12 @@ mod inner {
         pub(super) segment_size_in_memory: U64<LE>,
         pub(super) alignment: U64<LE>,
     }
+
+    #[derive(Debug)]
+    pub(super) enum HeaderEntry {
+        Elf32(Elf32HeaderEntry),
+        Elf64(Elf64HeaderEntry),
+    }
 }
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -68,10 +74,7 @@ pub const ELF32_ENTRY_SIZE: usize = size_of::<inner::Elf32HeaderEntry>();
 pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
 
 #[derive(Debug)]
-pub enum HeaderEntry {
-    Elf32(inner::Elf32HeaderEntry),
-    Elf64(inner::Elf64HeaderEntry),
-}
+pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
     fn error(kind: Kind, facility: Facility) -> Error {
@@ -104,7 +107,8 @@ impl HeaderEntry {
 
                     Ok(header_entry)
                 })
-                .map(HeaderEntry::Elf32),
+                .map(inner::HeaderEntry::Elf32)
+                .map(HeaderEntry),
 
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
                 .map_err(|err| try_read_error(facility, err))
@@ -116,14 +120,15 @@ impl HeaderEntry {
                         Err(err) => Err(Self::error(CantReadField("type", err), facility)),
                     }
                 })
-                .map(HeaderEntry::Elf64),
+                .map(inner::HeaderEntry::Elf64)
+                .map(HeaderEntry),
         }
     }
 
     pub fn r#type(&self) -> ProgramHeaderEntryType {
-        let r#type_word = match self {
-            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.r#type.get(),
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.r#type.get(),
+        let r#type_word = match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.r#type.get(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.r#type.get(),
         };
 
         match r#type_word {
@@ -144,81 +149,91 @@ impl HeaderEntry {
     }
 
     pub fn offset(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.offset.get() as u64,
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.offset.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.offset.get() as u64,
+            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.offset.get(),
         }
     }
 
     pub fn virtual_address(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.virtual_address.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.virtual_address.get(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
+                elf64_header_entry.virtual_address.get()
+            }
         }
     }
 
     pub fn segment_size_on_file(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.segment_size_on_file.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.segment_size_on_file.get(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
+                elf64_header_entry.segment_size_on_file.get()
+            }
         }
     }
 
     pub fn segment_size_in_memory(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.segment_size_in_memory.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => {
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
                 elf64_header_entry.segment_size_in_memory.get()
             }
         }
     }
 
     pub fn physical_address(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.physical_address.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.physical_address.get(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
+                elf64_header_entry.physical_address.get()
+            }
         }
     }
 
     pub fn on_file_size(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.segment_size_on_file.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.segment_size_on_file.get(),
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
+                elf64_header_entry.segment_size_on_file.get()
+            }
         }
     }
 
     pub fn in_memory_size(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => {
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
                 elf32_header_entry.segment_size_in_memory.get() as u64
             }
-            HeaderEntry::Elf64(elf64_header_entry) => {
+            inner::HeaderEntry::Elf64(elf64_header_entry) => {
                 elf64_header_entry.segment_size_in_memory.get()
             }
         }
     }
 
     pub fn address_alignment(&self) -> u64 {
-        match self {
-            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.alignment.get() as u64,
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.alignment.get(),
+        match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => {
+                elf32_header_entry.alignment.get() as u64
+            }
+            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.alignment.get(),
         }
     }
 
     pub fn permissions(&self) -> Permissions {
-        Permissions(match self {
-            HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get() as u8,
-            HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get() as u8,
+        Permissions(match &self.0 {
+            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get() as u8,
+            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get() as u8,
         })
     }
 
