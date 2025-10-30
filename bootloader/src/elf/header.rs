@@ -2,12 +2,17 @@ use core::fmt::Display;
 use core::fmt::Write;
 
 use crate::elf;
+use crate::elf::error::Facility;
 use crate::elf::program_header;
 use crate::elf::section;
-use crate::error;
-use crate::error::InternalError;
-use crate::error::Kind;
-use crate::error::try_read_error;
+use common::error::Context;
+use common::error::InternalError;
+use common::error::Kind;
+use common::error::Kind::*;
+use common::error::Reason;
+use common::error::Reason::*;
+use common::error::try_read_error;
+use elf::error::Error;
 use num_enum::TryFromPrimitive;
 use num_traits::AsPrimitive;
 use num_traits::PrimInt;
@@ -15,8 +20,6 @@ use zerocopy::TryFromBytes;
 use zerocopy::TryReadError;
 
 use super::Halfword;
-use error::Reason;
-use error::Result;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U16, U32, U64};
@@ -158,7 +161,7 @@ impl Display for ObjectType {
 }
 
 impl TryFrom<Halfword> for ObjectType {
-    type Error = error::Reason;
+    type Error = Reason;
 
     fn try_from(value: Halfword) -> core::result::Result<Self, Self::Error> {
         match value {
@@ -283,12 +286,9 @@ pub enum Header {
 }
 
 impl TryFrom<&[u8]> for Header {
-    type Error = error::Error;
+    type Error = Error;
 
     fn try_from(bytes: &[u8]) -> core::result::Result<Header, Self::Error> {
-        use error::Kind::*;
-        use error::Reason::*;
-
         let (elf_identifier, _rest) =
             ElfIdentifier::try_read_from_prefix(bytes).map_err(Self::try_read_error)?;
 
@@ -371,19 +371,12 @@ impl TryFrom<&[u8]> for Header {
 }
 
 impl Header {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> error::Error {
-        try_read_error(
-            crate::error::Facility::Elf(elf::error::Facility::Header),
-            err,
-        )
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
+        try_read_error(Facility::Header, err)
     }
 
-    fn error(kind: Kind) -> error::Error {
-        error::Error::InternalError(InternalError::new(
-            error::Facility::Elf(elf::error::Facility::Header),
-            kind,
-            error::Context::Parsing,
-        ))
+    fn error(kind: Kind) -> Error {
+        Error::InternalError(InternalError::new(Facility::Header, kind, Context::Parsing))
     }
 
     fn size(&self) -> Halfword {
@@ -487,7 +480,7 @@ impl Header {
 
     /// Print out the header using the given writer
     /// String formatting is considered infallible,
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> common::error::Result<(), Facility> {
         let magic = self.magic();
 
         writeln!(

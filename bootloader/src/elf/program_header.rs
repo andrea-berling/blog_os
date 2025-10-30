@@ -4,7 +4,14 @@ use crate::elf::{
     header,
 };
 
-use crate::error::{Kind, Reason, try_read_error};
+use crate::elf::Error;
+use common::error::Context;
+use common::error::InternalError;
+use common::error::Kind;
+use common::error::Kind::*;
+use common::error::Reason;
+use common::error::Result;
+use common::error::try_read_error;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -67,22 +74,18 @@ pub enum HeaderEntry {
 }
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: Facility) -> crate::error::Error {
-        crate::error::Error::InternalError(crate::error::InternalError::new(
-            crate::error::Facility::Elf(facility),
-            kind,
-            crate::error::Context::Parsing,
-        ))
+    fn error(kind: Kind, facility: Facility) -> Error {
+        Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
     }
 
     pub fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: Facility,
-    ) -> crate::error::Result<Self> {
+    ) -> Result<Self, Facility> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
+                .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -104,7 +107,7 @@ impl HeaderEntry {
                 .map(HeaderEntry::Elf32),
 
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
+                .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -219,7 +222,7 @@ impl HeaderEntry {
         })
     }
 
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> crate::error::Result<()> {
+    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> Result<(), Facility> {
         writeln!(writer, "Type: {}", self.r#type())?;
         writeln!(writer, "Offset: {:#x}", self.offset())?;
         writeln!(writer, "Virtual Address: {:#x}", self.virtual_address())?;
@@ -251,7 +254,7 @@ pub enum ProgramHeaderEntryType {
 impl TryFrom<u32> for ProgramHeaderEntryType {
     type Error = Reason;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(ProgramHeaderEntryType::Null),
             1 => Ok(ProgramHeaderEntryType::Load),
@@ -292,17 +295,16 @@ pub(crate) struct ProgramHeaderEntries<'a> {
     class: header::Class,
     bytes_read_so_far: usize,
 }
-use crate::error::Kind::*;
 use common::make_flags;
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
 
 impl<'a> ProgramHeaderEntries<'a> {
-    fn error(kind: crate::error::Kind) -> crate::error::Error {
-        crate::error::Error::InternalError(crate::error::InternalError::new(
-            crate::error::Facility::Elf(error::Facility::ProgramHeader),
+    fn error(kind: Kind) -> Error {
+        Error::InternalError(InternalError::new(
+            error::Facility::ProgramHeader,
             kind,
-            crate::error::Context::Parsing,
+            Context::Parsing,
         ))
     }
 
@@ -310,7 +312,7 @@ impl<'a> ProgramHeaderEntries<'a> {
         bytes: &'a [u8],
         class: header::Class,
         n_entries: Halfword,
-    ) -> crate::error::Result<Self> {
+    ) -> Result<Self, Facility> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
@@ -328,7 +330,7 @@ impl<'a> ProgramHeaderEntries<'a> {
 }
 
 impl<'a> Iterator for ProgramHeaderEntries<'a> {
-    type Item = crate::error::Result<HeaderEntry>;
+    type Item = Result<HeaderEntry, Facility>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {

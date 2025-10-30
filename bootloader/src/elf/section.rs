@@ -1,8 +1,16 @@
 use core::{fmt::Display, str::Utf8Error};
 
+use crate::elf::error::Facility;
 use crate::elf::{self, Halfword, Word, header};
 
-use crate::error::{self, Facility, InternalError, Kind, try_read_error};
+use common::error::Context;
+use common::error::InternalError;
+use common::error::Kind;
+use common::error::Kind::*;
+use common::error::Reason;
+use common::error::Result;
+use common::error::try_read_error;
+use elf::Error;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -50,22 +58,18 @@ pub enum HeaderEntry {
 }
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: elf::error::Facility) -> error::Error {
-        error::Error::InternalError(InternalError::new(
-            crate::error::Facility::Elf(facility),
-            kind,
-            error::Context::Parsing,
-        ))
+    fn error(kind: Kind, facility: Facility) -> Error {
+        Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
     }
 
     pub fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: elf::error::Facility,
-    ) -> error::Result<Self> {
+    ) -> Result<Self, Facility> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
+                .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -76,7 +80,7 @@ impl HeaderEntry {
                 })
                 .map(HeaderEntry::Elf32),
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(crate::error::Facility::Elf(facility), err))
+                .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -153,7 +157,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> error::Result<Section<'b>>
+    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> Result<Section<'b>, Facility>
     where
         'b: 'a,
     {
@@ -190,7 +194,7 @@ impl HeaderEntry {
 
     /// Print out the header using the given writer
     /// String formatting is considered infallible,
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> error::Result<()> {
+    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> Result<(), Facility> {
         writeln!(writer, "Name index: {}", self.name_index())?;
         writeln!(writer, "Type: {}", self.r#type())?;
         writeln!(writer, "Address: {:#x}", self.address())?;
@@ -229,9 +233,9 @@ pub(crate) enum SectionEntryType {
 }
 
 impl TryFrom<Word> for SectionEntryType {
-    type Error = error::Reason;
+    type Error = Reason;
 
-    fn try_from(value: Word) -> Result<Self, Self::Error> {
+    fn try_from(value: Word) -> core::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(SectionEntryType::Null),
             1 => Ok(SectionEntryType::Progbits),
@@ -253,7 +257,7 @@ impl TryFrom<Word> for SectionEntryType {
             v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
             v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
             v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
-            _ => Err(error::Reason::InvalidValue(value as u64)),
+            _ => Err(Reason::InvalidValue(value as u64)),
         }
     }
 }
@@ -331,12 +335,11 @@ pub(crate) struct SectionHeaderEntries<'a> {
     bytes_read_so_far: usize,
 }
 use common::make_flags;
-use error::Kind::*;
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;
 
 impl<'a> Iterator for SectionHeaderEntries<'a> {
-    type Item = error::Result<HeaderEntry>;
+    type Item = Result<HeaderEntry, Facility>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -362,11 +365,11 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
 }
 
 impl<'a> SectionHeaderEntries<'a> {
-    fn error(kind: error::Kind) -> error::Error {
-        error::Error::InternalError(error::InternalError::new(
-            error::Facility::Elf(elf::error::Facility::SectionHeader),
+    fn error(kind: Kind) -> Error {
+        Error::InternalError(InternalError::new(
+            elf::error::Facility::SectionHeader,
             kind,
-            error::Context::Parsing,
+            Context::Parsing,
         ))
     }
 
@@ -374,7 +377,7 @@ impl<'a> SectionHeaderEntries<'a> {
         bytes: &'a [u8],
         class: header::Class,
         n_entries: Halfword,
-    ) -> error::Result<Self> {
+    ) -> Result<Self, Facility> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
@@ -397,7 +400,7 @@ pub enum Section<'a> {
 }
 
 impl<'a> Section<'a> {
-    pub fn downcast_to_string_table(&self) -> Result<StringTable<'a>, Self> {
+    pub fn downcast_to_string_table(&self) -> Result<StringTable<'a>, Facility> {
         match self {
             Section::StringTable(items) => Ok(StringTable(items)),
         }
@@ -407,7 +410,7 @@ impl<'a> Section<'a> {
 pub struct StringTable<'a>(&'a [u8]);
 
 impl<'a> StringTable<'a> {
-    pub fn get_string(&self, index: usize) -> Option<Result<&str, Utf8Error>> {
+    pub fn get_string(&self, index: usize) -> Option<core::result::Result<&str, Utf8Error>> {
         if index >= self.0.len() {
             return None;
         }

@@ -1,11 +1,11 @@
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, Copy)]
-pub(crate) enum Facility {
-    #[error("drive parameters")]
+pub enum Facility {
+    #[error("EDD: drive parameters")]
     DriveParameters,
-    #[error("device path information")]
+    #[error("EDD: device path information")]
     DevicePathInformation,
-    #[error("fixed disk parameter table")]
+    #[error("EDD: fixed disk parameter table")]
     FixedDiskParameterTable,
 }

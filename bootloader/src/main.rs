@@ -9,7 +9,6 @@ use core::fmt::Write as _;
 
 mod edd;
 mod elf;
-mod error;
 
 #[cfg(target_os = "none")]
 use core::panic::PanicInfo;

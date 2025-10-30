@@ -4,12 +4,17 @@
 pub mod error;
 use core::fmt::Display;
 
+use common::error::{Context, Kind};
+use common::error::{Error, InternalError};
+use error::Facility;
+type EddError = Error<Facility>;
+use common::error::Kind::*;
+use common::error::Reason::*;
+
+use common::error::try_read_error;
 use common::make_flags;
-use core::fmt::Write as _;
 use num_enum::TryFromPrimitive;
 use zerocopy::{LE, TryFromBytes, TryReadError, U16, U32, U64};
-
-use crate::error::{InternalError, Kind, try_read_error};
 
 pub const DRIVE_PARAMETERS_BUFFER_SIZE: usize =
     size_of::<DriveParametersRaw>() + size_of::<DevicePathInformationRaw>();
@@ -132,30 +137,29 @@ impl Display for DevicePathInformation {
 }
 
 impl DevicePathInformation {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> crate::error::Error {
-        use crate::error::Facility::*;
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> EddError {
         use error::Facility::*;
-        try_read_error(Edd(DevicePathInformation), err)
+        try_read_error(DevicePathInformation, err)
     }
 }
 
 impl TryFrom<&[u8]> for DevicePathInformation {
-    type Error = crate::error::Error;
+    type Error = EddError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        use crate::error::Kind::*;
-        use crate::error::Reason::*;
+        use common::error::Kind::*;
+        use common::error::Reason::*;
         let (device_path_information_raw, _rest) =
             DevicePathInformationRaw::try_read_from_prefix(value).map_err(Self::try_read_error)?;
 
         if device_path_information_raw.bedd.get() != 0xbedd {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+            return Err(Error::InternalError(InternalError::new(
+                error::Facility::DevicePathInformation,
                 CantReadField(
                     "bedd",
                     InvalidValue(device_path_information_raw.bedd.get().into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -163,21 +167,21 @@ impl TryFrom<&[u8]> for DevicePathInformation {
             || device_path_information_raw.reserved_2.get() != 0
             || device_path_information_raw.reserved_3 != 0
         {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::DevicePathInformation,
                 CantReadField("bedd", InvalidValuesForReservedBits),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
         if device_path_information_raw.length as usize != size_of::<DevicePathInformationRaw>() {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::DevicePathInformation,
                 CantReadField(
                     "length",
                     InvalidValue(device_path_information_raw.length.into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -186,13 +190,13 @@ impl TryFrom<&[u8]> for DevicePathInformation {
             .fold(0, |checksum, &byte| checksum.wrapping_add(byte));
 
         if checksum.wrapping_add(device_path_information_raw.checksum) != 0 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::DevicePathInformation,
                 CantReadField(
                     "checksum",
                     InvalidValue(device_path_information_raw.checksum.into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -201,11 +205,9 @@ impl TryFrom<&[u8]> for DevicePathInformation {
 }
 
 impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
-    type Error = crate::error::Error;
+    type Error = EddError;
 
     fn try_from(value: &DevicePathInformationRaw) -> Result<Self, Self::Error> {
-        use crate::error::Kind::*;
-        use crate::error::Reason::*;
         let interface_path = value.interface_path.get().to_le_bytes();
         let host_bus = match value.host_bus_type {
             bytes if bytes.starts_with(b"PCI") => {
@@ -213,13 +215,13 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 let slot = interface_path[1];
                 let function = interface_path[2];
                 if !interface_path[3..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "PCI interface path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 HostBus::Pci {
@@ -231,25 +233,25 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"ISA") => {
                 let base_address = value.interface_path.get() as u16;
                 if !interface_path[2..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "ISA interface path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 HostBus::Isa { base_address }
             }
             bytes => {
-                return Err(crate::error::Error::InternalError(InternalError::new(
-                    crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                return Err(Error::InternalError(InternalError::new(
+                    Facility::DevicePathInformation,
                     CantReadField(
                         "host bus type",
                         InvalidValue(u32::from_be_bytes(bytes).into()),
                     ),
-                    crate::error::Context::Parsing,
+                    Context::Parsing,
                 )));
             }
         };
@@ -259,13 +261,13 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"ATA") => {
                 let is_slave = device_path[0] == 1;
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "ATA device path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 Interface::Ata { is_slave }
@@ -274,13 +276,13 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 let is_slave = device_path[0] == 1;
                 let logical_unit_number = device_path[1];
                 if !device_path[2..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "ATAPI device path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 Interface::Atapi {
@@ -291,13 +293,13 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"SCSI") => {
                 let logical_unit_number = device_path[0];
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "SCSI device path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 Interface::Scsi {
@@ -307,13 +309,13 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"USB") => {
                 let tbd = device_path[0];
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(crate::error::Error::InternalError(InternalError::new(
-                        crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                    return Err(Error::InternalError(InternalError::new(
+                        Facility::DevicePathInformation,
                         CantReadField(
                             "USB device path reserved bytes",
                             InvalidValuesForReservedBits,
                         ),
-                        crate::error::Context::Parsing,
+                        Context::Parsing,
                     )));
                 }
                 Interface::Usb { tbd }
@@ -325,10 +327,10 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 wwn: device_path[0],
             },
             bytes => {
-                return Err(crate::error::Error::InternalError(InternalError::new(
-                    crate::error::Facility::Edd(error::Facility::DevicePathInformation),
+                return Err(Error::InternalError(InternalError::new(
+                    Facility::DevicePathInformation,
                     CantReadField("interface type", InvalidValue(u64::from_be_bytes(bytes))),
-                    crate::error::Context::Parsing,
+                    Context::Parsing,
                 )));
             }
         };
@@ -411,11 +413,9 @@ impl Display for DriveParameters {
 }
 
 impl TryFrom<&DriveParametersRaw> for DriveParameters {
-    type Error = crate::error::Error;
+    type Error = EddError;
 
     fn try_from(value: &DriveParametersRaw) -> Result<Self, Self::Error> {
-        use crate::error::Kind::*;
-        use crate::error::Reason::*;
         if value.buffer_size.get() != 26 && value.buffer_size.get() != 30 {
             return Err(Self::error(CantReadField(
                 "buffer size",
@@ -491,13 +491,11 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
 }
 
 impl DriveParameters {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> crate::error::Error {
-        use crate::error::Facility::*;
-        use error::Facility::*;
-        try_read_error(Edd(DriveParameters), err)
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> EddError {
+        try_read_error(Facility::DriveParameters, err)
     }
 
-    pub fn from_bytes(bytes: &[u8], resolve_fdpt: bool) -> crate::error::Result<Self> {
+    pub fn from_bytes(bytes: &[u8], resolve_fdpt: bool) -> common::error::Result<Self, Facility> {
         let (drive_parameters_raw, _rest) =
             DriveParametersRaw::try_read_from_prefix(bytes).map_err(Self::try_read_error)?;
 
@@ -513,9 +511,7 @@ impl DriveParameters {
         Ok(result)
     }
 
-    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> crate::error::Result<()> {
-        use crate::error::Kind::*;
-
+    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> common::error::Result<(), Facility> {
         if fdbt_address == u32::MAX {
             // Nothing to do, the fdbt address is invalid
             return Ok(());
@@ -540,11 +536,11 @@ impl DriveParameters {
         Ok(())
     }
 
-    fn error(kind: Kind) -> crate::error::Error {
-        crate::error::Error::InternalError(InternalError::new(
-            crate::error::Facility::Edd(error::Facility::DriveParameters),
+    fn error(kind: Kind) -> EddError {
+        Error::InternalError(InternalError::new(
+            error::Facility::DriveParameters,
             kind,
-            crate::error::Context::Parsing,
+            common::error::Context::Parsing,
         ))
     }
 }
@@ -584,19 +580,15 @@ pub struct FixedDiskParameterTable {
 }
 
 impl FixedDiskParameterTable {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> crate::error::Error {
-        use crate::error::Facility::*;
-        use error::Facility::*;
-        try_read_error(Edd(FixedDiskParameterTable), err)
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> EddError {
+        try_read_error(Facility::FixedDiskParameterTable, err)
     }
 }
 
 impl TryFrom<&[u8]> for FixedDiskParameterTable {
-    type Error = crate::error::Error;
+    type Error = EddError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        use crate::error::Kind::*;
-        use crate::error::Reason::*;
         let (fixed_disk_parameter_table_raw, _rest) =
             FixedDiskParameterTableRaw::try_read_from_prefix(value)
                 .map_err(Self::try_read_error)?;
@@ -606,13 +598,13 @@ impl TryFrom<&[u8]> for FixedDiskParameterTable {
             .fold(0, |checksum, &byte| checksum.wrapping_add(byte));
 
         if checksum.wrapping_add(fixed_disk_parameter_table_raw.checksum) != 0 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField(
                     "checksum",
                     InvalidValue(fixed_disk_parameter_table_raw.checksum.into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -621,44 +613,41 @@ impl TryFrom<&[u8]> for FixedDiskParameterTable {
 }
 
 impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
-    type Error = crate::error::Error;
+    type Error = EddError;
 
     fn try_from(value: &FixedDiskParameterTableRaw) -> Result<Self, Self::Error> {
-        use crate::error::Kind::*;
-        use crate::error::Reason::*;
-
         if value.extension_revision != 0x11 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField(
                     "extension_revision",
                     InvalidValue(value.extension_revision.into()),
                 ),
-                crate::error::Context::Parsing,
+                common::error::Context::Parsing,
             )));
         }
 
         if value.head_prefix & 0b10001111 != 0b10000000 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                error::Facility::FixedDiskParameterTable,
                 CantReadField("head_prefix", InvalidValue(value.head_prefix.into())),
-                crate::error::Context::Parsing,
+                common::error::Context::Parsing,
             )));
         }
 
         if value.irq & 0xf0 != 0 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField("irq", InvalidValue(value.irq.into())),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
         if value.pio_type & 0xf0 != 0 {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField("pio_type", InvalidValue(value.pio_type.into())),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -667,13 +656,13 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
         if hw_flags.is_set(HWSpecificOptionFlagType::Atapi)
             && !hw_flags.is_set(HWSpecificOptionFlagType::AtapiUsesInterruptDRQ)
         {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField(
                     "hardware_specific_option_flags",
                     InvalidValue(value.hardware_specific_option_flags.get().into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 
@@ -681,13 +670,13 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
             && (hw_flags.is_set(HWSpecificOptionFlagType::TranslationTypeFirstBit)
                 || hw_flags.is_set(HWSpecificOptionFlagType::TranslationTypeSecondBit))
         {
-            return Err(crate::error::Error::InternalError(InternalError::new(
-                crate::error::Facility::Edd(error::Facility::FixedDiskParameterTable),
+            return Err(Error::InternalError(InternalError::new(
+                Facility::FixedDiskParameterTable,
                 CantReadField(
                     "hardware_specific_option_flags",
                     InvalidValue(value.hardware_specific_option_flags.get().into()),
                 ),
-                crate::error::Context::Parsing,
+                Context::Parsing,
             )));
         }
 

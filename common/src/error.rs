@@ -3,8 +3,6 @@ use core::cmp::min;
 use thiserror::Error;
 use zerocopy::{TryFromBytes, TryReadError};
 
-use crate::{edd, elf};
-
 pub const CONTEXT_LENGTH: usize = 16;
 
 #[derive(Error, Debug)]
@@ -34,7 +32,7 @@ pub enum Reason {
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum Kind {
+pub enum Kind {
     #[error("can't read '{0}' field: {1}")]
     CantReadField(&'static str, Reason),
     #[error("can't fit '{0}': not enough bytes")]
@@ -43,30 +41,22 @@ pub(crate) enum Kind {
     Generic(#[from] Reason),
 }
 
-#[derive(Error, Debug, Clone, Copy)]
-pub(crate) enum Facility {
-    #[error("ELF:")]
-    Elf(elf::error::Facility),
-    #[error("EDD:")]
-    Edd(edd::error::Facility),
-}
-
 #[derive(Error, Debug)]
-pub(crate) enum Context {
+pub enum Context {
     #[error("parsing")]
     Parsing,
 }
 
 #[derive(Error, Debug)]
 #[error("(where)={facility} (context)={context} (kind)={kind}")]
-pub(crate) struct InternalError {
+pub struct InternalError<Facility: core::error::Error> {
     facility: Facility,
     kind: Kind,
     context: Context,
 }
 
-impl InternalError {
-    pub(crate) fn new(facility: Facility, kind: Kind, context: Context) -> Self {
+impl<Facility: core::error::Error> InternalError<Facility> {
+    pub fn new(facility: Facility, kind: Kind, context: Context) -> Self {
         Self {
             facility,
             kind,
@@ -76,14 +66,14 @@ impl InternalError {
 }
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum Error<Facility: core::error::Error> {
     #[error("internal error: {0}")]
-    InternalError(#[from] InternalError),
+    InternalError(#[from] InternalError<Facility>),
     #[error("couldn't format to string: {0}")]
     FormattingError(#[from] core::fmt::Error),
 }
 
-pub(crate) type Result<T> = core::result::Result<T, Error>;
+pub type Result<T, Facility> = core::result::Result<T, Error<Facility>>;
 
 fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
     let mut context = [0u8; N];
@@ -92,10 +82,10 @@ fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
     context
 }
 
-pub(crate) fn try_read_error<U: TryFromBytes>(
+pub fn try_read_error<U: TryFromBytes, Facility: core::error::Error>(
     facility: Facility,
     err: TryReadError<&[u8], U>,
-) -> Error {
+) -> Error<Facility> {
     use Kind::*;
     use Reason::*;
     let dst_type_prefix = bounded_context(core::any::type_name::<U>().as_bytes());

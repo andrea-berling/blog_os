@@ -1,11 +1,22 @@
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html#elfid
 
-use crate::{elf::header::Header, error::Kind};
+use crate::elf::error::Facility;
+use crate::elf::header::Header;
 
-pub mod error;
+mod error;
 pub mod header;
 pub mod program_header;
 pub mod section;
+
+use common::error::Context;
+use common::error::InternalError;
+use common::error::Kind;
+use common::error::Kind::*;
+use common::error::Reason;
+use common::error::Reason::*;
+use common::error::Result;
+use common::error::try_read_error;
+use error::Error;
 
 type Halfword = u16;
 type Word = u32;
@@ -16,15 +27,8 @@ pub struct File<'a> {
 }
 
 impl<'a> File<'a> {
-    fn error(kind: Kind) -> crate::error::Error {
-        use crate::elf;
-        use crate::error;
-        use crate::error::InternalError;
-        error::Error::InternalError(InternalError::new(
-            error::Facility::Elf(elf::error::Facility::File),
-            kind,
-            error::Context::Parsing,
-        ))
+    fn error(kind: Kind) -> Error {
+        error::Error::InternalError(InternalError::new(Facility::File, kind, Context::Parsing))
     }
 
     pub fn sections(&self) -> section::SectionHeaderEntries<'a> {
@@ -56,7 +60,7 @@ impl<'a> File<'a> {
     pub fn get_section_by_index(
         &self,
         index: usize,
-    ) -> Option<crate::error::Result<section::Section<'_>>> {
+    ) -> Option<Result<section::Section<'_>, Facility>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
@@ -90,15 +94,13 @@ impl<'a> File<'a> {
 }
 
 impl<'a> TryFrom<&'a [u8]> for File<'a> {
-    type Error = crate::error::Error;
+    type Error = Error;
 
     fn try_from(bytes: &'a [u8]) -> core::result::Result<Self, Self::Error> {
         let result = Self {
             bytes,
             header: bytes.try_into()?,
         };
-
-        use crate::error::Kind::*;
 
         if result.bytes.len() < result.header.section_header_offset() as usize
             || result.bytes.len()
@@ -115,7 +117,6 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.program_header_entry_size()
                         * result.header.program_header_entries()) as u64) as usize
         {
-            use crate::error::Kind::*;
             return Err(Self::error(CantFit("program header")));
         }
 
