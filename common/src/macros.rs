@@ -42,8 +42,14 @@ macro_rules! make_flags {
                 self.0 |= flag as $flag_unsigned_type;
             }
 
-            fn unset_flag(&mut self, flag: $flag_type) {
+            fn clear_flag(&mut self, flag: $flag_type) {
                 self.0 &= !(flag as $flag_unsigned_type);
+            }
+        }
+
+        impl From<$flag_unsigned_type> for $flags_type {
+            fn from(value: $flag_unsigned_type) -> Self {
+                Self(value)
             }
         }
 

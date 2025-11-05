@@ -34,16 +34,16 @@ impl TimerControlWordFlags {
         use TimerControlWordFlag::*;
         match counter {
             Counter::_0 => {
-                self.unset_flag(CounterSelectBit1);
-                self.unset_flag(CounterSelectBit2);
+                self.clear_flag(CounterSelectBit1);
+                self.clear_flag(CounterSelectBit2);
             }
             Counter::_1 => {
-                self.unset_flag(CounterSelectBit1);
+                self.clear_flag(CounterSelectBit1);
                 self.set_flag(CounterSelectBit2);
             }
             Counter::_2 => {
                 self.set_flag(CounterSelectBit1);
-                self.unset_flag(CounterSelectBit2);
+                self.clear_flag(CounterSelectBit2);
             }
         }
         self
@@ -51,14 +51,14 @@ impl TimerControlWordFlags {
 
     fn counter_latch(mut self) -> Self {
         use TimerControlWordFlag::*;
-        self.unset_flag(ReadWriteSelectBit1);
-        self.unset_flag(ReadWriteSelectBit2);
+        self.clear_flag(ReadWriteSelectBit1);
+        self.clear_flag(ReadWriteSelectBit2);
         self
     }
 
     fn binary_countdown(mut self) -> Self {
         use TimerControlWordFlag::*;
-        self.unset_flag(BinaryCodedDecimals);
+        self.clear_flag(BinaryCodedDecimals);
         self
     }
 }
@@ -101,6 +101,7 @@ pub struct LowPrecisionTimer {
 impl LowPrecisionTimer {
     pub fn new(timeout_ns: u64) -> Self {
         // TODO: bound checks probably
+        // TODO: some sort of ceil?
         let ticks = (timeout_ns as f64 * TIMER_0_FREQUENCY_HZ as f64 / 1e9) as u64;
         Self {
             original_ticks: ticks,

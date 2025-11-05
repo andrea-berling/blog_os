@@ -29,6 +29,10 @@ pub enum Reason {
     },
     #[error("invalid values for reserved bits")]
     InvalidValuesForReservedBits,
+    #[error("ATA device not ready for commands")]
+    AtaDeviceNotReady,
+    #[error("Hanging ATA device")]
+    HangingAtaDevice,
 }
 
 #[derive(Error, Debug)]
@@ -37,6 +41,12 @@ pub enum Kind {
     CantReadField(&'static str, Reason),
     #[error("can't fit '{0}': not enough bytes")]
     CantFit(&'static str),
+    #[error("Invalid LBA address '{0}' (max allowed: {1})")]
+    InvalidLBAAddress(u64, u64),
+    #[error("Can't read into the given buffer: needed '{1}' bytes, only have {0}")]
+    CantReadIntoBuffer(u64, u64),
+    #[error("timeout: {0}")]
+    Timeout(Reason),
     #[error(transparent)]
     Generic(#[from] Reason),
 }
@@ -45,6 +55,8 @@ pub enum Kind {
 pub enum Context {
     #[error("parsing")]
     Parsing,
+    #[error("I/O")]
+    Io,
 }
 
 #[derive(Error, Debug)]

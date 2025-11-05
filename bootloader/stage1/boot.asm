@@ -1,6 +1,8 @@
 ; boot.asm
 bits 16
 org 0x7C00
+STAGE2_STACK_START equ 0x90000
+STAGE2_ENTRYPOINT equ 0x0010000
 
 ; TODO: check if A20 is enabled before going to PE and long mode
 ; https://fancykillerpanda.github.io/OS-Tutorial/02_bootloader/a20-line/
@@ -55,14 +57,15 @@ mov es, ax
 mov ss, ax
 mov fs, ax
 mov gs, ax
-mov esp, 0x90000
+mov esp, STAGE2_STACK_START
 ; cdecl convention to pass parameters to main
 push dword [ExtensionsBitmap]
 push dword [EDDVersion]
+push dword STAGE2_STACK_START
 push dword KERNEL_SECTORS
 push dword STAGE2_SECTORS
 push dword DriveParameters
-call 0x0010000
+call STAGE2_ENTRYPOINT
 
 ; precondition: ah contains the desired interrupt code
 ; precondition: all the other argumetns (e.g. DS,SI) are already set

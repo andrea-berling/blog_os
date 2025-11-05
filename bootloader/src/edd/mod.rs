@@ -490,17 +490,46 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
     }
 }
 
-impl DriveParameters {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> EddError {
-        try_read_error(Facility::DriveParameters, err)
-    }
+impl TryFrom<DriveParameters> for common::ata::Device {
+    type Error = DriveParameters;
 
-    pub fn from_bytes(bytes: &[u8], resolve_fdpt: bool) -> common::error::Result<Self, Facility> {
+    fn try_from(value: DriveParameters) -> Result<Self, Self::Error> {
+        //io_port_base_address: u16, control_port_base_address: u16, is_slave: bool, sectors: u64, sector_size_bytes: u16
+        let Some(fdpt) = &value.fixed_disk_parameter_table else {
+            return Err(value);
+        };
+        let io_port_base_address = fdpt.io_port_base;
+        let control_port_base_address = fdpt.control_port_base;
+        let Some(device_path_information) = &value.device_path_information else {
+            return Err(value);
+        };
+        let is_slave = match device_path_information.interface {
+            Interface::Ata { is_slave } | Interface::Atapi { is_slave, .. } => is_slave,
+            _ => {
+                return Err(value);
+            }
+        };
+        let sectors = value.sectors;
+        let sector_size_bytes = value.bytes_per_sector;
+        Ok(common::ata::Device::new(
+            io_port_base_address,
+            control_port_base_address,
+            is_slave,
+            sectors,
+            sector_size_bytes,
+        ))
+    }
+}
+
+impl TryFrom<&[u8]> for DriveParameters {
+    type Error = common::error::Error<Facility>;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let (drive_parameters_raw, _rest) =
             DriveParametersRaw::try_read_from_prefix(bytes).map_err(Self::try_read_error)?;
 
         let mut result = Self::try_from(&drive_parameters_raw)?;
-        if resolve_fdpt && drive_parameters_raw.configuration_parameters.get() != u32::MAX {
+        if drive_parameters_raw.configuration_parameters.get() != u32::MAX {
             result.resolve_fdbt(drive_parameters_raw.configuration_parameters.get())?;
         }
 
@@ -509,6 +538,12 @@ impl DriveParameters {
         }
 
         Ok(result)
+    }
+}
+
+impl DriveParameters {
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> EddError {
+        try_read_error(Facility::DriveParameters, err)
     }
 
     pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> common::error::Result<(), Facility> {
@@ -784,14 +819,14 @@ mod tests {
 
     const QEMU_DRIVE_PARAMETERS_BYTES: [u8; 66] = [
         0x1e, 0x0, 0x2, 0x0, 0x2, 0x0, 0x0, 0x0, 0x10, 0x0, 0x0, 0x0, 0x3f, 0x0, 0x0, 0x0, 0x91,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0xe0, 0xf1, 0x80, 0xda, 0xdd, 0xbe, 0x24, 0x0,
+        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0xff, 0xff, 0xff, 0xff, 0xdd, 0xbe, 0x24, 0x0,
         0x0, 0x0, 0x50, 0x43, 0x49, 0x20, 0x41, 0x54, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20, 0x0, 0x1,
         0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcd,
     ];
 
     const BOCHS_DRIVE_PARAMETERS_BYTES: [u8; 66] = [
         0x1e, 0x0, 0x2, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x12, 0x0, 0x0, 0x0, 0x91,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x44, 0x2, 0xc0, 0x9f, 0xdd, 0xbe, 0x24, 0x0,
+        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0xff, 0xff, 0xff, 0xff, 0xdd, 0xbe, 0x24, 0x0,
         0x0, 0x0, 0x49, 0x53, 0x41, 0x20, 0x41, 0x54, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20, 0xf0,
         0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xdd,
     ];
@@ -807,7 +842,7 @@ mod tests {
     #[test]
     fn test_parse_drive_parameters() {
         let qemu_drive_parameters =
-            edd::DriveParameters::from_bytes(&QEMU_DRIVE_PARAMETERS_BYTES, false).unwrap();
+            edd::DriveParameters::try_from(&QEMU_DRIVE_PARAMETERS_BYTES[..]).unwrap();
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,
@@ -831,7 +866,7 @@ mod tests {
         );
 
         let bochs_drive_parameters =
-            edd::DriveParameters::from_bytes(&BOCHS_DRIVE_PARAMETERS_BYTES, false).unwrap();
+            edd::DriveParameters::try_from(&BOCHS_DRIVE_PARAMETERS_BYTES[..]).unwrap();
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,

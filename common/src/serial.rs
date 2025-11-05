@@ -178,6 +178,7 @@ impl Com1 {
         // SAFETY: need some assembly to do serial I/O
         unsafe { asm!("out dx,al", in("dx") Self::modem_control_register(), in("al") 0u8) };
 
+        // SAFETY: no multitasking, no problem
         unsafe { COM1_INITIALIZED = true }
     }
 

@@ -373,6 +373,58 @@ impl TryFrom<&[u8]> for Header {
     }
 }
 
+impl core::fmt::Display for Header {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let magic = self.magic();
+
+        writeln!(
+            f,
+            "Magic: {:#x} {}{}{}",
+            magic[0],
+            // SAFETY: the magic number was checked in Header::new
+            unsafe { char::from_u32_unchecked(magic[1] as u32) },
+            // SAFETY: the magic number was checked in Header::new
+            unsafe { char::from_u32_unchecked(magic[2] as u32) },
+            // SAFETY: the magic number was checked in Header::new
+            unsafe { char::from_u32_unchecked(magic[3] as u32) }
+        )?;
+        writeln!(f, "Class: {}", self.class())?;
+        writeln!(f, "Data Encoding: {}", self.encoding())?;
+        writeln!(f, "File Version: {}", self.version())?;
+        writeln!(f, "File type: {}", self.r#type())?;
+        writeln!(f, "Entrypoint: {:#x}", self.entrypoint())?;
+        writeln!(f, "Header size: {}", self.size())?;
+
+        writeln!(f, "Program header offset: {}", self.program_header_offset())?;
+        writeln!(
+            f,
+            "Program header entries: {}",
+            self.program_header_entries()
+        )?;
+        writeln!(
+            f,
+            "Program header entry size: {}",
+            self.program_header_entry_size()
+        )?;
+
+        writeln!(f, "Section header offset: {}", self.section_header_offset())?;
+        writeln!(
+            f,
+            "Section header entries: {}",
+            self.section_header_entries()
+        )?;
+        writeln!(
+            f,
+            "Section header entry size: {}",
+            self.section_header_entry_size()
+        )?;
+
+        writeln!(f, "String table index: {}", self.string_table_index())?;
+
+        Ok(())
+    }
+}
+
 impl Header {
     fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
         try_read_error(Facility::Header, err)
@@ -479,66 +531,6 @@ impl Header {
             inner::Header::Elf32(elf32_header) => elf32_header.r#type.get().try_into().unwrap(),
             inner::Header::Elf64(elf64_header) => elf64_header.r#type.get().try_into().unwrap(),
         }
-    }
-
-    /// Print out the header using the given writer
-    /// String formatting is considered infallible,
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> common::error::Result<(), Facility> {
-        let magic = self.magic();
-
-        writeln!(
-            writer,
-            "Magic: {:#x} {}{}{}",
-            magic[0],
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[1] as u32) },
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[2] as u32) },
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[3] as u32) }
-        )?;
-        writeln!(writer, "Class: {}", self.class())?;
-        writeln!(writer, "Data Encoding: {}", self.encoding())?;
-        writeln!(writer, "File Version: {}", self.version())?;
-        writeln!(writer, "File type: {}", self.r#type())?;
-        writeln!(writer, "Entrypoint: {:#x}", self.entrypoint())?;
-        writeln!(writer, "Header size: {}", self.size())?;
-
-        writeln!(
-            writer,
-            "Program header offset: {}",
-            self.program_header_offset()
-        )?;
-        writeln!(
-            writer,
-            "Program header entries: {}",
-            self.program_header_entries()
-        )?;
-        writeln!(
-            writer,
-            "Program header entry size: {}",
-            self.program_header_entry_size()
-        )?;
-
-        writeln!(
-            writer,
-            "Section header offset: {}",
-            self.section_header_offset()
-        )?;
-        writeln!(
-            writer,
-            "Section header entries: {}",
-            self.section_header_entries()
-        )?;
-        writeln!(
-            writer,
-            "Section header entry size: {}",
-            self.section_header_entry_size()
-        )?;
-
-        writeln!(writer, "String table index: {}", self.string_table_index())?;
-
-        Ok(())
     }
 }
 

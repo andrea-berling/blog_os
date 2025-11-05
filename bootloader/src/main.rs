@@ -13,7 +13,7 @@ mod elf;
 #[cfg(target_os = "none")]
 use core::panic::PanicInfo;
 
-use common::{serial, vga};
+use common::{ata, serial, timer, vga};
 
 use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
 
@@ -33,17 +33,14 @@ pub extern "C" fn start(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,
     kernel_sectors: u32,
+    stack_start: u32,
     _edd_version: u32,
     _extensions_bitmap: u32,
 ) -> ! {
     let mut vga_writer = vga::Writer::new();
     writeln!(vga_writer, "Hello from stage2!").unwrap();
-
     let mut serial_writer = serial::Com1::get();
     writeln!(serial_writer, "Hello from COM1!").unwrap();
-
-    writeln!(vga_writer, "stage2_sectors: {stage2_sectors}").unwrap();
-    writeln!(vga_writer, "kernel_sectors: {kernel_sectors}").unwrap();
 
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
@@ -54,14 +51,37 @@ pub extern "C" fn start(
             .unwrap()
     };
 
-    writeln!(vga_writer, "{drive_parameters_bytes:x?}").unwrap();
-    writeln!(serial_writer, "{drive_parameters_bytes:#x?}").unwrap();
-
-    let drive_parameters = edd::DriveParameters::from_bytes(drive_parameters_bytes, true)
+    let drive_parameters = edd::DriveParameters::try_from(drive_parameters_bytes)
         .inspect_err(|err| {
             writeln!(vga_writer, "{err:#}").unwrap();
         })
         .unwrap();
+
+    let ata_device = ata::Device::try_from(drive_parameters).unwrap();
+
+    let kernel_size_bytes = (kernel_sectors * ata_device.sector_size_bytes() as u32) as usize;
+    // SAFETY: The start of the stack for stage 2 and the number of sectors in the kernel were
+    // correctly determined at compile time and passed by the stage1
+    let kernel_bytes = unsafe {
+        core::ptr::slice_from_raw_parts_mut(
+            // Align to a 8 byte boundary (for reading a ELF header)
+            ((stack_start + 7) & !0x7) as *mut u8,
+            kernel_size_bytes,
+        )
+        .as_mut()
+        .unwrap()
+    };
+
+    if kernel_sectors > 256 {
+        panic!("Kernel sectors over 256: kernel_sectors = {kernel_sectors}")
+    }
+    ata_device
+        .read_sectors_lba28_pio(kernel_sectors as u8, stage2_sectors + 1, kernel_bytes)
+        .unwrap();
+
+    let kernel = elf::File::try_from(&kernel_bytes[..kernel_size_bytes]).unwrap();
+
+    writeln!(vga_writer, "{}", kernel.header()).unwrap();
 
     loop {}
 }
@@ -79,7 +99,7 @@ fn main() {
         }
     };
     let mut s = String::new();
-    elf_file.header().write_to(&mut s).unwrap();
+    writeln!(s, "{}", elf_file.header()).unwrap();
     print!("{s}");
 
     let string_table = elf_file
