@@ -1,21 +1,19 @@
 use core::fmt::Display;
-use core::fmt::Write;
 
 use crate::elf;
 use crate::elf::error::Facility;
 use crate::elf::program_header;
 use crate::elf::section;
-use common::error::Context;
-use common::error::InternalError;
-use common::error::Kind;
-use common::error::Kind::*;
-use common::error::Reason;
-use common::error::Reason::*;
-use common::error::try_read_error;
+use crate::error::Context;
+use crate::error::InternalError;
+use crate::error::Kind;
+use crate::error::Kind::*;
+use crate::error::Reason;
+use crate::error::Reason::*;
+use crate::error::try_read_error;
 use elf::error::Error;
 use num_enum::TryFromPrimitive;
-use num_traits::AsPrimitive;
-use num_traits::PrimInt;
+use num_traits::{AsPrimitive, PrimInt};
 use zerocopy::TryFromBytes;
 use zerocopy::TryReadError;
 
@@ -377,17 +375,18 @@ impl core::fmt::Display for Header {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let magic = self.magic();
 
-        writeln!(
-            f,
-            "Magic: {:#x} {}{}{}",
-            magic[0],
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[1] as u32) },
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[2] as u32) },
-            // SAFETY: the magic number was checked in Header::new
-            unsafe { char::from_u32_unchecked(magic[3] as u32) }
-        )?;
+        #[allow(clippy::multiple_unsafe_ops_per_block)]
+        // SAFETY: the magic number was checked in Header::new and is made of valid chars
+        unsafe {
+            writeln!(
+                f,
+                "Magic: {:#x} {}{}{}",
+                magic[0],
+                char::from_u32_unchecked(magic[1] as u32),
+                char::from_u32_unchecked(magic[2] as u32),
+                char::from_u32_unchecked(magic[3] as u32)
+            )?;
+        }
         writeln!(f, "Class: {}", self.class())?;
         writeln!(f, "Data Encoding: {}", self.encoding())?;
         writeln!(f, "File Version: {}", self.version())?;
@@ -441,7 +440,7 @@ impl Header {
         }
     }
 
-    pub fn class(&self) -> Class {
+    pub(crate) fn class(&self) -> Class {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.identifier.class,
             inner::Header::Elf64(elf64_header) => elf64_header.identifier.class,
@@ -511,7 +510,7 @@ impl Header {
         }
     }
 
-    fn entrypoint(&self) -> u64 {
+    pub fn entrypoint(&self) -> u64 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.entrypoint.get() as u64,
             inner::Header::Elf64(elf64_header) => elf64_header.entrypoint.get(),

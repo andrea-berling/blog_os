@@ -1,7 +1,7 @@
 // https://www.alldatasheet.com/datasheet-pdf/download/66093/INTEL/PIIX3.html
 use core::arch::asm;
 
-use crate::make_flags;
+use crate::make_bitmap;
 
 const TIMER_0_FREQUENCY_HZ: u32 = 1_193_182;
 
@@ -16,7 +16,7 @@ enum Counter {
 
 #[allow(unused)]
 #[repr(u8)]
-enum TimerControlWordFlag {
+pub enum TimerControlWordFlag {
     BinaryCodedDecimals = 0x1,
     CounterModeBit1 = 0x2,
     CounterModeBit2 = 0x4,
@@ -27,7 +27,7 @@ enum TimerControlWordFlag {
     CounterSelectBit2 = 0x80,
 }
 
-make_flags!(new_type: TimerControlWordFlags, underlying_flag_type: TimerControlWordFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: TimerControlWordFlags, underlying_flag_type: TimerControlWordFlag, repr: u8, nodisplay);
 
 impl TimerControlWordFlags {
     fn select_counter(mut self, counter: Counter) -> Self {
@@ -83,11 +83,6 @@ fn read_timer_0_counter() -> u16 {
         );
     }
     result
-}
-
-/// Given a number of elapsed ticks, returns roughly how many nanoseconds have passed
-fn nanoseconds_elapsed_timer_0(ticks: u32) -> u64 {
-    ((ticks as f64 / TIMER_0_FREQUENCY_HZ as f64) * 1e9) as u64
 }
 
 #[derive(Debug)]

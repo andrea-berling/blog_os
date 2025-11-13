@@ -18,4 +18,4 @@ pub enum Facility {
     ProgramHeaderEntry(Halfword),
 }
 
-pub(crate) type Error = common::error::Error<Facility>;
+pub type Error = crate::error::Error<Facility>;

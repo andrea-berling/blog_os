@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::make_flags;
+use crate::make_bitmap;
 
 const COM1: u16 = 0x3F8;
 
@@ -10,19 +10,19 @@ static mut COM1_INITIALIZED: bool = false;
 
 #[allow(unused)]
 #[repr(u8)]
-enum InterruptEnableFlag {
+pub enum InterruptEnableFlag {
     ReceivedDataAvailable = 0x1,
     TransmitterHoldingRegisterEmpty = 0x2,
     ReceiverLineStatus = 0x4,
     ModemStatus = 0x8,
 }
 
-make_flags!(new_type: InterruptEnableFlags, underlying_flag_type: InterruptEnableFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: InterruptEnableFlags, underlying_flag_type: InterruptEnableFlag, repr: u8, nodisplay);
 
 #[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum LineControlRegisterFlag {
+pub enum LineControlRegisterFlag {
     DataBits1 = 1 << 0,
     DataBits2 = 1 << 1,
     StopBits = 1 << 2,
@@ -33,12 +33,12 @@ enum LineControlRegisterFlag {
     DivisorLatchAcccessBit = 1 << 7,
 }
 
-make_flags!(new_type: LineControlRegisterFlags, underlying_flag_type: LineControlRegisterFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: LineControlRegisterFlags, underlying_flag_type: LineControlRegisterFlag, repr: u8, nodisplay);
 
 #[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum FifoControlRegisterFlag {
+pub enum FifoControlRegisterFlag {
     EnableFifo = 1 << 0,
     ClearReceiveFifo = 1 << 1,
     ClearTransmitFifo = 1 << 2,
@@ -50,7 +50,7 @@ enum FifoControlRegisterFlag {
 #[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum ModemControlRegisterFlag {
+pub enum ModemControlRegisterFlag {
     DataTerminalReady = 1 << 0,
     RequestToSend = 1 << 1,
     Out1 = 1 << 2,
@@ -58,12 +58,12 @@ enum ModemControlRegisterFlag {
     Loopback = 1 << 4,
 }
 
-make_flags!(new_type: ModemControlRegisterFlags, underlying_flag_type: ModemControlRegisterFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: ModemControlRegisterFlags, underlying_flag_type: ModemControlRegisterFlag, repr: u8, nodisplay);
 
 #[allow(unused)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum LineStatusRegisterFlag {
+pub enum LineStatusRegisterFlag {
     DataReady = 1 << 0,
     OverrunError = 1 << 1,
     ParityError = 1 << 2,
@@ -74,7 +74,7 @@ enum LineStatusRegisterFlag {
     ImpendingError = 1 << 7,
 }
 
-make_flags!(new_type: LineStatusRegisterFlags, underlying_flag_type: LineStatusRegisterFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: LineStatusRegisterFlags, underlying_flag_type: LineStatusRegisterFlag, repr: u8, nodisplay);
 
 impl Com1 {
     pub fn get() -> Self {

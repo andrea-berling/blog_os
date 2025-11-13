@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use crate::{
     error::{Kind, Reason},
-    make_flags, timer,
+    make_bitmap, timer,
 };
 
 mod error {
@@ -39,7 +39,7 @@ enum Command {
 
 #[allow(unused)]
 #[repr(u8)]
-enum DriveHeadRegisterFlag {
+pub enum DriveHeadRegisterFlag {
     Lba24Chs0 = 0x1,
     Lba25Chs1 = 0x2,
     Lba26Chs2 = 0x4,
@@ -50,11 +50,11 @@ enum DriveHeadRegisterFlag {
     AlwaysSet2 = 0x80,
 }
 
-make_flags!(new_type: DriveHeadRegisterFlags, underlying_flag_type: DriveHeadRegisterFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: DriveHeadRegisterFlags, underlying_flag_type: DriveHeadRegisterFlag, repr: u8, nodisplay);
 
 #[allow(unused)]
 #[repr(u8)]
-enum StatusRegisterFlag {
+pub enum StatusRegisterFlag {
     Error = 0x1,
     Index = 0x2,
     CorrectedData = 0x4,
@@ -65,7 +65,7 @@ enum StatusRegisterFlag {
     BusyPreparingToSendReceive = 0x80, // BSY
 }
 
-make_flags!(new_type: StatusRegisterFlags, underlying_flag_type: StatusRegisterFlag, repr: u8, nodisplay);
+make_bitmap!(new_type: StatusRegisterFlags, underlying_flag_type: StatusRegisterFlag, repr: u8, nodisplay);
 
 impl DriveHeadRegisterFlags {
     pub fn new() -> Self {

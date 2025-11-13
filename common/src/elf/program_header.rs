@@ -1,17 +1,20 @@
-use crate::elf::{
-    Halfword,
-    error::{self, Facility},
-    header,
+use crate::{
+    elf::{
+        Halfword,
+        error::{self, Facility},
+        header,
+    },
+    make_bitmap,
 };
 
 use crate::elf::Error;
-use common::error::Context;
-use common::error::InternalError;
-use common::error::Kind;
-use common::error::Kind::*;
-use common::error::Reason;
-use common::error::Result;
-use common::error::try_read_error;
+use crate::error::Context;
+use crate::error::InternalError;
+use crate::error::Kind;
+use crate::error::Kind::*;
+use crate::error::Reason;
+use crate::error::Result;
+use crate::error::try_read_error;
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -68,7 +71,7 @@ impl core::fmt::Display for PermissionFlag {
     }
 }
 
-make_flags!(new_type: Permissions, underlying_flag_type: PermissionFlag, repr: u8, bit_skipper: |i| i > 2);
+make_bitmap!(new_type: Permissions, underlying_flag_type: PermissionFlag, repr: u8, bit_skipper: |i| i > 2);
 
 pub const ELF32_ENTRY_SIZE: usize = size_of::<inner::Elf32HeaderEntry>();
 pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
@@ -81,7 +84,7 @@ impl HeaderEntry {
         Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
     }
 
-    pub fn try_from_bytes(
+    pub(crate) fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: Facility,
@@ -199,28 +202,6 @@ impl HeaderEntry {
         }
     }
 
-    pub fn on_file_size(&self) -> u64 {
-        match &self.0 {
-            inner::HeaderEntry::Elf32(elf32_header_entry) => {
-                elf32_header_entry.segment_size_on_file.get() as u64
-            }
-            inner::HeaderEntry::Elf64(elf64_header_entry) => {
-                elf64_header_entry.segment_size_on_file.get()
-            }
-        }
-    }
-
-    pub fn in_memory_size(&self) -> u64 {
-        match &self.0 {
-            inner::HeaderEntry::Elf32(elf32_header_entry) => {
-                elf32_header_entry.segment_size_in_memory.get() as u64
-            }
-            inner::HeaderEntry::Elf64(elf64_header_entry) => {
-                elf64_header_entry.segment_size_in_memory.get()
-            }
-        }
-    }
-
     pub fn address_alignment(&self) -> u64 {
         match &self.0 {
             inner::HeaderEntry::Elf32(elf32_header_entry) => {
@@ -236,16 +217,18 @@ impl HeaderEntry {
             inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get() as u8,
         })
     }
+}
 
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> Result<(), Facility> {
-        writeln!(writer, "Type: {}", self.r#type())?;
-        writeln!(writer, "Offset: {:#x}", self.offset())?;
-        writeln!(writer, "Virtual Address: {:#x}", self.virtual_address())?;
-        writeln!(writer, "Physical Address: {:#x}", self.physical_address())?;
-        writeln!(writer, "Size on file: {}", self.on_file_size())?;
-        writeln!(writer, "Size in memory: {}", self.in_memory_size())?;
-        writeln!(writer, "Address Alignment: {:#x}", self.address_alignment())?;
-        writeln!(writer, "Permissions: {}", self.permissions())?;
+impl core::fmt::Display for HeaderEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Type: {}", self.r#type())?;
+        writeln!(f, "Offset: {:#x}", self.offset())?;
+        writeln!(f, "Virtual Address: {:#x}", self.virtual_address())?;
+        writeln!(f, "Physical Address: {:#x}", self.physical_address())?;
+        writeln!(f, "Size on file: {}", self.segment_size_on_file())?;
+        writeln!(f, "Size in memory: {}", self.segment_size_in_memory())?;
+        writeln!(f, "Address Alignment: {:#x}", self.address_alignment())?;
+        writeln!(f, "Permissions: {}", self.permissions())?;
         Ok(())
     }
 }
@@ -305,12 +288,11 @@ impl core::fmt::Display for ProgramHeaderEntryType {
     }
 }
 
-pub(crate) struct ProgramHeaderEntries<'a> {
+pub struct ProgramHeaderEntries<'a> {
     bytes: &'a [u8],
     class: header::Class,
     bytes_read_so_far: usize,
 }
-use common::make_flags;
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
 

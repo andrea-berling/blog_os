@@ -91,6 +91,7 @@ gdt:
   dq 0                        ; null
   dq 0x00CF9A000000FFFF       ; code: base=0, limit=4GB, P=1, DPL=0, Code, R, 32-bit
   dq 0x00CF92000000FFFF       ; data: base=0, limit=4GB, P=1, DPL=0, Data, W, 32-bit
+; 6 bytes: len(gdt) - 1 (2 bytes), linear_addr(gdt) (4 bytes)
 gdt_desc:
   dw gdt_end - gdt - 1
   dd gdt

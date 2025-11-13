@@ -3,13 +3,14 @@ use core::{fmt::Display, str::Utf8Error};
 use crate::elf::error::Facility;
 use crate::elf::{self, Halfword, Word, header};
 
-use common::error::Context;
-use common::error::InternalError;
-use common::error::Kind;
-use common::error::Kind::*;
-use common::error::Reason;
-use common::error::Result;
-use common::error::try_read_error;
+use crate::error::Context;
+use crate::error::InternalError;
+use crate::error::Kind;
+use crate::error::Kind::*;
+use crate::error::Reason;
+use crate::error::Result;
+use crate::error::try_read_error;
+use crate::make_bitmap;
 use elf::Error;
 
 mod inner {
@@ -65,7 +66,7 @@ impl HeaderEntry {
         Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
     }
 
-    pub fn try_from_bytes(
+    pub(crate) fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: elf::error::Facility,
@@ -105,7 +106,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn r#type(&self) -> SectionEntryType {
+    pub(crate) fn r#type(&self) -> SectionEntryType {
         // PANIC: shouldn't panic, we check the type as soon as the entry is created
         match &self.0 {
             inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().unwrap(),
@@ -300,7 +301,7 @@ impl Display for SectionEntryType {
     }
 }
 
-make_flags!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
+make_bitmap!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
 
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u32)]
@@ -334,12 +335,11 @@ impl Display for FlagType {
     }
 }
 
-pub(crate) struct SectionHeaderEntries<'a> {
+pub struct SectionHeaderEntries<'a> {
     bytes: &'a [u8],
     class: header::Class,
     bytes_read_so_far: usize,
 }
-use common::make_flags;
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;
 

@@ -31,8 +31,33 @@ pub enum Reason {
     InvalidValuesForReservedBits,
     #[error("ATA device not ready for commands")]
     AtaDeviceNotReady,
-    #[error("Hanging ATA device")]
+    #[error("hanging ATA device")]
     HangingAtaDevice,
+    #[error("invalid kernel segment parameters: virtual address: {virtual_address}, size: {size}")]
+    InvalidSegmentParameters { virtual_address: u64, size: u64 },
+    #[error("too many sectors: {0}")]
+    TooManySectors(u32),
+    #[error("invalid ELF")]
+    InvalidElf,
+    #[error("I/O error")]
+    IOError,
+    #[error("unsupported feature: {0}")]
+    UnsupportedFeature(Feature),
+    #[error("unsupported boot medium")]
+    UnsupportedBootMedium,
+}
+
+#[derive(Debug)]
+pub enum Feature {
+    _1GBPages,
+}
+
+impl core::fmt::Display for Feature {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Feature::_1GBPages => write!(f, "1GB Pages"),
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -47,6 +72,14 @@ pub enum Kind {
     CantReadIntoBuffer(u64, u64),
     #[error("timeout: {0}")]
     Timeout(Reason),
+    #[error("can't load ELF segment: {0}")]
+    CantLoadSegment(Reason),
+    #[error("can't read kernel segments from disk: {0}")]
+    CantReadKernelFromDisk(Reason),
+    #[error("can't set up control registers: {0}")]
+    CantSetupControlRegisters(Reason),
+    #[error("can't set up page table: {0}")]
+    CantSetupPageTable(Reason),
     #[error(transparent)]
     Generic(#[from] Reason),
 }
@@ -57,10 +90,14 @@ pub enum Context {
     Parsing,
     #[error("I/O")]
     Io,
+    #[error("loading the kernel")]
+    LoadingKernel,
+    #[error("setting up processor data structures")]
+    SettingUpProcessor,
 }
 
 #[derive(Error, Debug)]
-#[error("(where)={facility} (context)={context} (kind)={kind}")]
+#[error("\n  (where)={facility}\n  (context)={context}\n  (kind)={kind}")]
 pub struct InternalError<Facility: core::error::Error> {
     facility: Facility,
     kind: Kind,
@@ -79,15 +116,15 @@ impl<Facility: core::error::Error> InternalError<Facility> {
 
 #[derive(Error, Debug)]
 pub enum Error<Facility: core::error::Error> {
-    #[error("internal error: {0}")]
+    #[error("Internal error: {0}")]
     InternalError(#[from] InternalError<Facility>),
-    #[error("couldn't format to string: {0}")]
+    #[error("Couldn't format to string: {0}")]
     FormattingError(#[from] core::fmt::Error),
 }
 
 pub type Result<T, Facility> = core::result::Result<T, Error<Facility>>;
 
-fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
+pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
     let mut context = [0u8; N];
     context[..min(N, context_bytes.len())]
         .copy_from_slice(&context_bytes[..min(N, context_bytes.len())]);

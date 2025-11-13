@@ -7,12 +7,12 @@ pub mod header;
 pub mod program_header;
 pub mod section;
 
-use common::error::Context;
-use common::error::InternalError;
-use common::error::Kind;
-use common::error::Kind::*;
-use common::error::Result;
-use error::Error;
+use crate::error::Context;
+use crate::error::InternalError;
+use crate::error::Kind;
+use crate::error::Kind::*;
+use crate::error::Result;
+pub use error::Error;
 
 type Halfword = u16;
 type Word = u32;
@@ -82,6 +82,13 @@ impl<'a> File<'a> {
             }
             Err(err) => Some(Err(err)),
         }
+    }
+
+    pub fn get_segment(&self, program_header: &program_header::HeaderEntry) -> Option<&[u8]> {
+        self.bytes.get(
+            (program_header.offset() as usize)
+                ..(program_header.offset() + program_header.segment_size_on_file()) as usize,
+        )
     }
 
     pub fn header(&self) -> &header::Header {

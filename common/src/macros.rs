@@ -1,7 +1,7 @@
 #[macro_export]
-macro_rules! make_flags {
+macro_rules! make_bitmap {
     (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty$(, bit_skipper: $skip_bit:expr)?) => {
-        make_flags!(new_type: $flags_type, underlying_flag_type: $flag_type, repr: $flag_unsigned_type, nodisplay);
+        make_bitmap!(new_type: $flags_type, underlying_flag_type: $flag_type, repr: $flag_unsigned_type, nodisplay);
 
         impl ::core::fmt::Display for $flags_type {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -25,12 +25,12 @@ macro_rules! make_flags {
         }
     };
     (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty, nodisplay) => {
-        #[derive(Debug, Default, PartialEq, Eq)]
+        #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
         pub struct $flags_type($flag_unsigned_type);
 
         #[allow(unused)]
         impl $flags_type {
-            fn empty() -> Self {
+            pub const fn empty() -> Self {
                 $flags_type(0)
             }
 
@@ -38,7 +38,7 @@ macro_rules! make_flags {
                 self.0 & (flag as $flag_unsigned_type) != 0
             }
 
-            fn set_flag(&mut self, flag: $flag_type) {
+            pub fn set_flag(&mut self, flag: $flag_type) {
                 self.0 |= flag as $flag_unsigned_type;
             }
 

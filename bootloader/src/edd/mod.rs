@@ -6,13 +6,13 @@ use core::fmt::Display;
 
 use common::error::{Context, Kind};
 use common::error::{Error, InternalError};
+use common::make_bitmap;
 use error::Facility;
 type EddError = Error<Facility>;
 use common::error::Kind::*;
 use common::error::Reason::*;
 
 use common::error::try_read_error;
-use common::make_flags;
 use num_enum::TryFromPrimitive;
 use zerocopy::{LE, TryFromBytes, TryReadError, U16, U32, U64};
 
@@ -369,7 +369,7 @@ impl Display for InfoFlagType {
     }
 }
 
-make_flags!(new_type: InfoFlags, underlying_flag_type: InfoFlagType, repr: u16, bit_skipper: |i| i > 6);
+make_bitmap!(new_type: InfoFlags, underlying_flag_type: InfoFlagType, repr: u16, bit_skipper: |i| i > 6);
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug, Default)]
@@ -596,7 +596,7 @@ impl Display for HeadRegisterFlagType {
     }
 }
 
-make_flags!(new_type: HeadRegisterUpperNibble, underlying_flag_type: HeadRegisterFlagType, repr: u8, bit_skipper: |i| i != 4 && i != 6);
+make_bitmap!(new_type: HeadRegisterUpperNibble, underlying_flag_type: HeadRegisterFlagType, repr: u8, bit_skipper: |i| i != 4 && i != 6);
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug, Default)]
@@ -811,7 +811,7 @@ impl Display for HWSpecificOptionFlagType {
     }
 }
 
-make_flags!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
+make_bitmap!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
 
 #[cfg(test)]
 mod tests {

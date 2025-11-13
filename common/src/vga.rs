@@ -1,3 +1,8 @@
+use core::{
+    fmt::Write,
+    ptr::{addr_of, addr_of_mut},
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(unused)]
@@ -53,18 +58,15 @@ const VGA_BUF: *mut Buffer = 0xb8000 as *mut Buffer;
 pub struct Writer {
     column_position: usize,
     color_code: ColorCode,
-    buffer: &'static mut Buffer,
+    buffer: *mut Buffer,
 }
 
 impl Writer {
     pub const fn new() -> Self {
-        // SAFETY: VGA_BUF is the same throughout execution, and ScreenChar has alignment 1
-        let buf_ref: Option<&'static mut Buffer> = unsafe { VGA_BUF.as_mut() };
         Self {
             column_position: 0,
             color_code: ColorCode::new(Color::White, Color::Black),
-            // SAFETY: VGA_BUF is not null as defined above
-            buffer: unsafe { buf_ref.unwrap_unchecked() },
+            buffer: VGA_BUF,
         }
     }
 
@@ -73,11 +75,10 @@ impl Writer {
             return;
         }
         // SAFETY: row and col are within bounds
+        let char_ptr = unsafe { addr_of_mut!((*self.buffer).chars[row][col]) };
+        // SAFETY: row and col are within bounds
         unsafe {
-            core::ptr::write_volatile(
-                core::ptr::from_mut(&mut self.buffer.chars[row][col]),
-                screen_char,
-            );
+            core::ptr::write_volatile(char_ptr, screen_char);
         }
     }
 
@@ -85,12 +86,11 @@ impl Writer {
         if row >= BUFFER_HEIGHT || col >= BUFFER_WIDTH {
             return None;
         }
+
         // SAFETY: row and col are within bounds
-        unsafe {
-            Some(core::ptr::read_volatile(core::ptr::from_ref(
-                &self.buffer.chars[row][col],
-            )))
-        }
+        let char_ptr = unsafe { addr_of!((*self.buffer).chars[row][col]) };
+        // SAFETY: row and col are within bounds
+        unsafe { Some(core::ptr::read_volatile(char_ptr)) }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
@@ -157,9 +157,35 @@ impl Writer {
     }
 }
 
+impl Default for Writer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl core::fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write_string(s);
         Ok(())
     }
 }
+
+static mut DEFAULT_SINGLE_TASK_WRITER: Writer = Writer::new();
+
+pub fn __writeln_no_sync(args: core::fmt::Arguments) -> core::fmt::Result {
+    // SAFETY: no multitasking, no synchronization needed
+    let writer_ptr = &raw mut DEFAULT_SINGLE_TASK_WRITER;
+    // SAFETY: no multitasking, no synchronization needed
+    let writer = unsafe { &mut *writer_ptr };
+    writer.write_fmt(args)?;
+    writeln!(writer)
+}
+
+#[macro_export]
+macro_rules! vga_writeln_no_sync {
+    ($format_string:literal$(, $args:expr)*) => {
+        $crate::vga::__writeln_no_sync(::core::format_args!($format_string $(,$args)*,))
+    };
+}
+
+pub use vga_writeln_no_sync as writeln_no_sync;
