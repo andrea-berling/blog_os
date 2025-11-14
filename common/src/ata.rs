@@ -74,7 +74,9 @@ impl DriveHeadRegisterFlags {
     }
 
     pub fn lba(mut self, address: u32) -> Self {
-        let flags = DriveHeadRegisterFlags((address >> 24) as u8);
+        let flags = DriveHeadRegisterFlags {
+            bits: (address >> 24) as u8,
+        };
         use DriveHeadRegisterFlag::*;
         if flags.is_set(Lba24Chs0) {
             self.set_flag(Lba24Chs0);

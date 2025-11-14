@@ -192,10 +192,14 @@ impl HeaderEntry {
     }
 
     pub fn flags(&self) -> Flags {
-        Flags(match &self.0 {
-            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get().into(),
-            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get(),
-        })
+        Flags {
+            bits: match &self.0 {
+                inner::HeaderEntry::Elf32(elf32_header_entry) => {
+                    elf32_header_entry.flags.get().into()
+                }
+                inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get(),
+            },
+        }
     }
 
     /// Print out the header using the given writer

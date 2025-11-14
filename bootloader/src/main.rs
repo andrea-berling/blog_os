@@ -379,6 +379,7 @@ fn setup_page_tables() -> error::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "none")]
 fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
     for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
         program_header.ok().and_then(|program_header| {
@@ -499,6 +500,7 @@ fn load_kernel_from_boot_disk(
 
 #[cfg(not(target_os = "none"))]
 fn main() {
+    use std::fmt::Write as _;
     let mut args = std::env::args();
     args.next().unwrap();
     let bytes = std::fs::read(args.next().unwrap()).unwrap();
@@ -510,7 +512,7 @@ fn main() {
         }
     };
     let mut s = String::new();
-    writeln!(s, "{}", elf_file.header()).unwrap();
+    writeln!(&mut s, "{}", elf_file.header()).unwrap();
     print!("{s}");
 
     let string_table = elf_file

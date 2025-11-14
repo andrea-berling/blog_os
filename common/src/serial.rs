@@ -188,7 +188,7 @@ impl Com1 {
         // SAFETY: need some assembly to do serial I/O
         unsafe { asm!("in al, dx", out("al") line_status, in("dx") Self::line_status_register()) };
 
-        let line_status = LineStatusRegisterFlags(line_status);
+        let line_status = LineStatusRegisterFlags { bits: line_status };
         line_status.is_set(LineStatusRegisterFlag::TransmitterHoldingRegisterEmpty)
     }
 

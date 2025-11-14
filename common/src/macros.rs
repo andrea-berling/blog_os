@@ -26,42 +26,50 @@ macro_rules! make_bitmap {
     };
     (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty, nodisplay) => {
         #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
-        pub struct $flags_type($flag_unsigned_type);
+        pub struct $flags_type {
+            bits: $flag_unsigned_type
+        }
 
         #[allow(unused)]
         impl $flags_type {
             pub const fn empty() -> Self {
-                $flags_type(0)
+                $flags_type{
+                    bits: 0
+                }
             }
 
             fn is_set(&self, flag: $flag_type) -> bool {
-                self.0 & (flag as $flag_unsigned_type) != 0
+                self.bits & (flag as $flag_unsigned_type) != 0
             }
 
             pub fn set_flag(&mut self, flag: $flag_type) {
-                self.0 |= flag as $flag_unsigned_type;
+                self.bits |= flag as $flag_unsigned_type;
             }
 
             fn clear_flag(&mut self, flag: $flag_type) {
-                self.0 &= !(flag as $flag_unsigned_type);
+                self.bits &= !(flag as $flag_unsigned_type);
             }
         }
 
         impl From<$flag_unsigned_type> for $flags_type {
             fn from(value: $flag_unsigned_type) -> Self {
-                Self(value)
+                Self {
+                    bits: value
+                }
             }
         }
 
         impl From<$flags_type> for $flag_unsigned_type {
             fn from(value: $flags_type) -> Self {
-                value.0
+                value.bits
             }
         }
 
         impl From<$flag_type> for $flags_type {
             fn from(value: $flag_type) -> Self {
-                let mut result = $flags_type(0);
+                let mut result = $flags_type {
+                  bits: 0
+                };
                 result.set_flag(value);
                 result
             }
@@ -71,7 +79,9 @@ macro_rules! make_bitmap {
             type Output = $flags_type;
 
             fn bitor(self, rhs: Self) -> Self::Output {
-                let mut flags = $flags_type(0);
+                let mut flags = $flags_type {
+                    bits: 0
+                };
                 flags.set_flag(self);
                 flags.set_flag(rhs);
                 flags

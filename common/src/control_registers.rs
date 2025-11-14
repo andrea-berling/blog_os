@@ -39,7 +39,7 @@ impl ControlRegister3 {
                 alignment: 0x1000,
             });
         }
-        self.0 = address;
+        self.bits = address;
         Ok(())
     }
 }

@@ -76,8 +76,8 @@ make_bitmap!(new_type: GateDescriptorFlags, underlying_flag_type: GateDescriptor
 
 impl GateDescriptorFlags {
     pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-        self.0 &= !0x60_00;
-        self.0 |= (privilege_level as u16) << 12;
+        self.bits &= !0x60_00;
+        self.bits |= (privilege_level as u16) << 12;
     }
 }
 
@@ -96,7 +96,7 @@ impl Default for InterruptGateDescriptor {
         let mut flags = GateDescriptorFlags::empty();
         flags.set_flag(GateDescriptorBit::Present);
         flags.set_privilege_level(PrivilegeLevel::Ring0);
-        flags.0 |= 0b00110 << 8;
+        flags.bits |= 0b00110 << 8;
         flags.set_flag(GateDescriptorBit::_32BitGate);
         Self {
             offset_hi: Default::default(),

@@ -1,4 +1,4 @@
-use crate::{gdt, make_bitmap};
+use crate::make_bitmap;
 
 #[allow(unused)]
 #[repr(u8)]
@@ -11,8 +11,8 @@ make_bitmap!(new_type: Selector, underlying_flag_type: SelectorBit, repr: u8, no
 impl Selector {
     pub fn with_index(index: u8) -> Self {
         let mut result = Self::empty();
-        result.0 &= 0x7;
-        result.0 |= index << 3;
+        result.bits &= 0x7;
+        result.bits |= index << 3;
         result
     }
 }

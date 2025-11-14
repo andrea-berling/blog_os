@@ -4,7 +4,7 @@ use core::arch::x86::__cpuid;
 use core::arch::x86_64::__cpuid;
 use core::cmp::min;
 
-use crate::{error::bounded_context, make_bitmap};
+use crate::make_bitmap;
 
 #[allow(unused)]
 #[repr(u64)]
@@ -121,8 +121,8 @@ impl PML4Entry {
         self.0.set_flag(PageTableEntryFlag::Present);
         let max_width = get_max_physical_address_width();
         let addr = (pdpt as *const _ as u64) & ((1u64 << max_width) - 1);
-        self.0.0 &= ADDRESS_CLEAR_MASK;
-        self.0.0 |= addr;
+        self.0.bits &= ADDRESS_CLEAR_MASK;
+        self.0.bits |= addr;
     }
 }
 
@@ -162,16 +162,16 @@ impl PageDirectoryPointerTableEntry {
         self.0.set_flag(PageTableEntryFlag::MapsPage);
         let max_physical_width = get_max_physical_address_width();
         let addr = (page.0 as u64) & ((1 << max_physical_width) - 1);
-        self.0.0 &= !0x7_ffff_ffff_f000;
-        self.0.0 |= addr;
+        self.0.bits &= !0x7_ffff_ffff_f000;
+        self.0.bits |= addr;
     }
 
     pub fn set_page_directory(&mut self, page_directory: &'static PageDirectoryTable) {
         self.0.set_flag(PageTableEntryFlag::Present);
         let max_physical_width = get_max_physical_address_width();
         let addr = (page_directory.0.as_ptr() as u64) & ((1 << max_physical_width) - 1);
-        self.0.0 &= !0x7_ffff_ffff_f000;
-        self.0.0 |= addr;
+        self.0.bits &= !0x7_ffff_ffff_f000;
+        self.0.bits |= addr;
     }
 }
 
@@ -211,16 +211,16 @@ impl PageDirectoryEntry {
         self.0.set_flag(PageTableEntryFlag::MapsPage);
         let max_physical_width = get_max_physical_address_width();
         let addr = (page as u64) & ((1 << max_physical_width) - 1);
-        self.0.0 &= ADDRESS_CLEAR_MASK;
-        self.0.0 |= addr;
+        self.0.bits &= ADDRESS_CLEAR_MASK;
+        self.0.bits |= addr;
     }
 
     pub fn set_page_table(&mut self, page_table: &'static PageTable) {
         self.0.set_flag(PageTableEntryFlag::Present);
         let max_physical_width = min(get_max_physical_address_width(), 39);
         let addr = (page_table.0.as_ptr() as u64) & ((1 << max_physical_width) - 1);
-        self.0.0 &= ADDRESS_CLEAR_MASK;
-        self.0.0 |= addr;
+        self.0.bits &= ADDRESS_CLEAR_MASK;
+        self.0.bits |= addr;
     }
 }
 
@@ -238,8 +238,8 @@ impl PageTableEntry {
         let address = page.0.as_ptr() as u64;
         let max_physical_width = get_max_physical_address_width();
         let addr = address & ((1 << max_physical_width) - 1);
-        self.0 &= (u64::MAX << max_physical_width).rotate_left(12);
-        self.0 |= addr;
+        self.bits &= (u64::MAX << max_physical_width).rotate_left(12);
+        self.bits |= addr;
     }
 }
 

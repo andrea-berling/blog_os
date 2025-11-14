@@ -23,13 +23,13 @@ macro_rules! impl_descriptor_ops {
     ($descriptor_type:ty) => {
         impl $descriptor_type {
             pub fn set_limit_hi(&mut self, limit_hi: u8) {
-                self.0 &= !0x0f_00;
-                self.0 |= (limit_hi as u16 & 0x0f) << 8;
+                self.bits &= !0x0f_00;
+                self.bits |= (limit_hi as u16 & 0x0f) << 8;
             }
 
             pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-                self.0 &= !0x60_00;
-                self.0 |= (privilege_level as u16) << 12;
+                self.bits &= !0x60_00;
+                self.bits |= (privilege_level as u16) << 12;
             }
         }
     };
@@ -96,9 +96,13 @@ enum SegmentFlags {
 impl From<u16> for SegmentFlags {
     fn from(value: u16) -> Self {
         match (value >> 3) & 0x3 {
-            b if b == (SegmentType::Data as u16) => Self::Data(DataSegmentDescriptorFlags(value)),
-            b if b == (SegmentType::Code as u16) => Self::Code(CodeSegmentDescriptorFlags(value)),
-            _ => Self::Task(TaskSegmentDescriptorFlags(value)),
+            b if b == (SegmentType::Data as u16) => {
+                Self::Data(DataSegmentDescriptorFlags { bits: value })
+            }
+            b if b == (SegmentType::Code as u16) => {
+                Self::Code(CodeSegmentDescriptorFlags { bits: value })
+            }
+            _ => Self::Task(TaskSegmentDescriptorFlags { bits: value }),
         }
     }
 }

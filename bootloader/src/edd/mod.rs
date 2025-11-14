@@ -423,7 +423,9 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
             )));
         }
 
-        let information_flags: InfoFlags = InfoFlags(value.information_flags.get());
+        let information_flags: InfoFlags = InfoFlags {
+            bits: value.information_flags.get(),
+        };
         if information_flags.is_set(InfoFlagType::SuppliedGeometryValid) {
             if value.cylinders.get() == 0 {
                 return Err(Self::error(CantReadField(
@@ -686,7 +688,9 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
             )));
         }
 
-        let hw_flags = HWSpecificOptionFlags(value.hardware_specific_option_flags.get());
+        let hw_flags = HWSpecificOptionFlags {
+            bits: value.hardware_specific_option_flags.get(),
+        };
 
         if hw_flags.is_set(HWSpecificOptionFlagType::Atapi)
             && !hw_flags.is_set(HWSpecificOptionFlagType::AtapiUsesInterruptDRQ)
@@ -718,15 +722,17 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
         Ok(Self {
             io_port_base: value.io_port_base.get(),
             control_port_base: value.control_port_base.get(),
-            head_prefix: HeadRegisterUpperNibble(value.head_prefix),
+            head_prefix: HeadRegisterUpperNibble {
+                bits: value.head_prefix,
+            },
             irq: value.irq,
             sector_count: value.sector_count,
             dma_channel: value.dma_channel_type & 0xf,
             dma_type: value.dma_channel_type >> 4,
             pio_type: value.pio_type,
-            hardware_specific_option_flags: HWSpecificOptionFlags(
-                value.hardware_specific_option_flags.get(),
-            ),
+            hardware_specific_option_flags: HWSpecificOptionFlags {
+                bits: value.hardware_specific_option_flags.get(),
+            },
             extension_revision: value.extension_revision,
             checksum: value.checksum,
         })
@@ -846,7 +852,7 @@ mod tests {
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,
-                information_flags: edd::InfoFlags(2),
+                information_flags: edd::InfoFlags { bits: 2 },
                 cylinders: 2,
                 heads: 16,
                 sectors_per_track: 63,
@@ -870,7 +876,7 @@ mod tests {
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,
-                information_flags: edd::InfoFlags(2),
+                information_flags: edd::InfoFlags { bits: 2 },
                 cylinders: 1,
                 heads: 1,
                 sectors_per_track: 18,
@@ -897,7 +903,9 @@ mod tests {
             FixedDiskParameterTable {
                 io_port_base: 0x1f0,
                 control_port_base: 0x3f6,
-                head_prefix: edd::HeadRegisterUpperNibble(0xa0 | LBAEnabled as u8),
+                head_prefix: edd::HeadRegisterUpperNibble {
+                    bits: 0xa0 | LBAEnabled as u8
+                },
                 irq: 14,
                 sector_count: 1,
                 dma_channel: 0,
@@ -915,7 +923,9 @@ mod tests {
             FixedDiskParameterTable {
                 io_port_base: 0x1f0,
                 control_port_base: 0x3f6,
-                head_prefix: edd::HeadRegisterUpperNibble(0xa0 | LBAEnabled as u8),
+                head_prefix: edd::HeadRegisterUpperNibble {
+                    bits: 0xa0 | LBAEnabled as u8
+                },
                 irq: 14,
                 sector_count: 1,
                 dma_channel: 0,

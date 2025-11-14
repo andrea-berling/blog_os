@@ -212,10 +212,16 @@ impl HeaderEntry {
     }
 
     pub fn permissions(&self) -> Permissions {
-        Permissions(match &self.0 {
-            inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.flags.get() as u8,
-            inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.flags.get() as u8,
-        })
+        Permissions {
+            bits: match &self.0 {
+                inner::HeaderEntry::Elf32(elf32_header_entry) => {
+                    elf32_header_entry.flags.get() as u8
+                }
+                inner::HeaderEntry::Elf64(elf64_header_entry) => {
+                    elf64_header_entry.flags.get() as u8
+                }
+            },
+        }
     }
 }
 
