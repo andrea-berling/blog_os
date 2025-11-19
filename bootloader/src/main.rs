@@ -2,6 +2,8 @@
 // https://stackoverflow.com/questions/67902309/how-to-compile-rust-code-to-bare-metal-32-bit-x86-i686-code-what-compile-targ#67902310
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
+#![deny(clippy::missing_panics_doc)]
+#![deny(clippy::unwrap_used)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
 use core::arch::{asm, naked_asm};
@@ -24,7 +26,7 @@ use common::{
     gdt::{self, SegmentDescriptor},
     idt,
     paging::{self},
-    tss, vga,
+    pci, tss, vga,
 };
 
 use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
@@ -33,13 +35,16 @@ use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    vga::writeln_no_sync!("{info:#?}").unwrap();
+    vga::writeln_no_sync!("{info:#?}");
     loop {}
 }
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.start")]
 #[cfg(target_os = "none")]
+/// # Panics
+/// Panics under any of the following conditions:
+///   - can't write to the VGA display
 pub extern "cdecl" fn start(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,
@@ -48,7 +53,7 @@ pub extern "cdecl" fn start(
     _edd_version: u32,
     _extensions_bitmap: u32,
 ) -> ! {
-    vga::writeln_no_sync!("Hello from stage2!").unwrap();
+    vga::writeln_no_sync!("Hello from stage2!");
 
     let kernel = load_kernel_from_boot_disk(
         drive_parameters_pointer,
@@ -56,9 +61,9 @@ pub extern "cdecl" fn start(
         kernel_sectors,
         stack_start,
     )
-    .inspect_err(|err| vga::writeln_no_sync!("{err:#}").unwrap())
-    .unwrap();
-    vga::writeln_no_sync!("Read kernel from disk!").unwrap();
+    .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
+    .expect("failed loading kernel from boot disk into memory");
+    vga::writeln_no_sync!("Read kernel from disk!");
 
     let entrypoint = kernel.header().entrypoint();
 
@@ -79,22 +84,22 @@ pub extern "cdecl" fn start(
             vga::writeln_no_sync!(
                 "Kernel entrypoint too high for a stack of 1MB: entrypoint={entrypoint:#x}"
             )
-            .unwrap()
         })
-        .unwrap();
+        .expect("Kernel entrypoint too high for a stack of 1MB");
 
     load_segments_into_memory(&kernel)
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}").unwrap())
-        .unwrap();
-    vga::writeln_no_sync!("Loaded kernel segments into memory!").unwrap();
+        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
+        .expect("failed to load kernel segments into memory");
+    vga::writeln_no_sync!("Loaded kernel segments into memory!");
 
     setup_page_tables()
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}").unwrap())
-        .unwrap();
+        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
+        .expect("failed to set up page tables");
 
     setup_global_descriptor_table();
     //setup_debug_interrupt_descriptor_table();
-    let (cr0, cr3, cr4, efer) = setup_control_registers().unwrap();
+    let (cr0, cr3, cr4, efer) = setup_control_registers()
+        .expect("failed setting up control registers CR0, CR3, CR4, and EFER");
 
     // SAFETY: A valid page table was set up in setup_page_tables, and cr3 was loaded with its
     // address in setup_control_regsiters.
@@ -191,6 +196,9 @@ const GDTI_64_BIT_CODE_SEGMENT: usize = 3;
 const GDTI_64_BIT_DATA_SEGMENT: usize = 4;
 const GDTI_TSS: usize = 5;
 
+/// # Panics
+/// Panics if the values for the data segment and the size of the gdt::SegmentDescriptor struct
+/// exceed u16 (likely programming errors)
 fn setup_global_descriptor_table() {
     use gdt::SegmentKind::*;
     macro_rules! update_gdt {
@@ -289,25 +297,23 @@ extern "cdecl" fn general_protection_handler(
         asm!("mov {cr2}, cr2", "mov {cr3}, cr3", cr2 = out(reg) cr2, cr3 = out(reg) cr3);
     }
 
-    vga::writeln_no_sync!("General Protection Fault!").unwrap();
+    vga::writeln_no_sync!("General Protection Fault!");
     vga::writeln_no_sync!(
         "EAX={:08X} EBX={:08X} ECX={:08X} EDX={:08X}",
         eax,
         ebx,
         ecx,
         edx
-    )
-    .unwrap();
-    vga::writeln_no_sync!("ESI={:08X} EDI={:08X} EBP={:08X}", esi, edi, ebp).unwrap();
+    );
+    vga::writeln_no_sync!("ESI={:08X} EDI={:08X} EBP={:08X}", esi, edi, ebp);
     vga::writeln_no_sync!(
         "EIP={:08X} CS={:08X} EFLAGS={:08X} ERROR_CODE={:08X}",
         eip,
         cs,
         eflags,
         error_code
-    )
-    .unwrap();
-    vga::writeln_no_sync!("CR2={:08X} CR3={:08X}", cr2, cr3).unwrap();
+    );
+    vga::writeln_no_sync!("CR2={:08X} CR3={:08X}", cr2, cr3);
     loop {}
 }
 
@@ -379,6 +385,8 @@ fn setup_page_tables() -> error::Result<()> {
     Ok(())
 }
 
+/// # Panics
+/// Panics if the kernel ELF file is corrupted and loadable segments can't be read from the file
 #[cfg(target_os = "none")]
 fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
     for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
@@ -413,11 +421,19 @@ fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
                 loadable_program_header.segment_size_on_file() as usize,
             )
         };
-        loading_area.copy_from_slice(kernel.get_segment(&loadable_program_header).unwrap());
+        loading_area.copy_from_slice(
+            kernel
+                .get_segment(&loadable_program_header)
+                .expect("failed to get segment from kernel ELF file"),
+        );
     }
     Ok(())
 }
 
+/// # Panics
+///
+/// Panics if the drive_parameters_pointer doesn't point to valid drive parameters data (e.g. null,
+/// invalid data that can't be parsed, etc.)
 fn load_kernel_from_boot_disk(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,
@@ -430,13 +446,13 @@ fn load_kernel_from_boot_disk(
     let drive_parameters_bytes = unsafe {
         core::ptr::slice_from_raw_parts(drive_parameters_pointer, DRIVE_PARAMETERS_BUFFER_SIZE)
             .as_ref()
-            .unwrap()
+            .expect("failed to convert raw pointer into a ref")
     };
 
     // SAFETY: For the reasons above, it's just as safe to unwrap here
     let drive_parameters = edd::DriveParameters::try_from(drive_parameters_bytes)
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}").unwrap())
-        .unwrap();
+        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
+        .expect("failed to get drive parameters for the boot disk");
 
     match ata::Device::try_from(drive_parameters) {
         Ok(ata_device) => {
@@ -451,7 +467,7 @@ fn load_kernel_from_boot_disk(
                     kernel_size_bytes,
                 )
                 .as_mut()
-                .unwrap()
+                .expect("failed to convert raw pointer into a mut ref")
             };
 
             // FIXME: if the kernel gets large enough, we might want to read it in multiple
@@ -466,7 +482,7 @@ fn load_kernel_from_boot_disk(
             }
             let Ok(()) = ata_device
                 .read_sectors_lba28_pio(kernel_sectors as u8, stage2_sectors + 1, kernel_bytes)
-                .map_err(|err| vga::writeln_no_sync!("{err:#}").unwrap())
+                .map_err(|err| vga::writeln_no_sync!("{err:#}"))
             else {
                 return Err(InternalError::new(
                     Bootloader,
@@ -477,7 +493,7 @@ fn load_kernel_from_boot_disk(
             };
 
             elf::File::try_from(&kernel_bytes[..kernel_size_bytes]).map_err(|err| {
-                vga::writeln_no_sync!("{err:#}").unwrap();
+                vga::writeln_no_sync!("{err:#}");
                 InternalError::new(
                     Bootloader,
                     Kind::CantReadKernelFromDisk(Reason::InvalidElf),

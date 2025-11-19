@@ -27,30 +27,34 @@ impl<'a> File<'a> {
         error::Error::InternalError(InternalError::new(Facility::File, kind, Context::Parsing))
     }
 
+    /// # Panics
+    /// Will panic if the size of the ELF file was not validated to contain enough bytes for the
+    /// section header, and if that state wasn't preserved
     pub fn sections(&self) -> section::SectionHeaderEntries<'a> {
         let n_entries = self.header.section_header_entries();
 
-        // PANIC: the size of the ELF file was validate in the new method
         section::SectionHeaderEntries::new(
             &self.bytes[self.header.section_header_offset() as usize..]
                 [..(self.header.section_header_entry_size() * n_entries) as usize],
             self.header.class(),
             n_entries,
         )
-        .unwrap()
+        .expect("not enough bytes for the section header")
     }
 
+    /// # Panics
+    /// Will panic if the size of the ELF file was not validated to contain enough bytes for the
+    /// program header, and if that state wasn't preserved
     pub fn program_headers(&self) -> program_header::ProgramHeaderEntries<'a> {
         let n_entries = self.header.program_header_entries();
 
-        // PANIC: the size of the ELF file was validate in the new method
         program_header::ProgramHeaderEntries::new(
             &self.bytes[self.header.program_header_offset() as usize..]
                 [..(self.header.program_header_entry_size() * n_entries) as usize],
             self.header.class(),
             n_entries,
         )
-        .unwrap()
+        .expect("not enough bytes for the program header")
     }
 
     pub fn get_section_by_index(

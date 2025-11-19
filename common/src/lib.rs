@@ -1,5 +1,7 @@
 #![deny(clippy::multiple_unsafe_ops_per_block)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
+#![deny(clippy::missing_panics_doc)]
+#![deny(clippy::unwrap_used)]
 #![no_std]
 pub mod ata;
 pub mod control_registers;

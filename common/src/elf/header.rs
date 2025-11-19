@@ -524,11 +524,18 @@ impl Header {
         }
     }
 
+    /// # Panics
+    /// Panics if the Header instance had not been validated on creation or was modified in
+    /// uncontrolled ways afterwards
     pub fn r#type(&self) -> ObjectType {
-        // PANIC: shouldn't panic for we checked the type in the new method
+        let error_msg = "type field did not contain a valid ELF object type";
         match &self.0 {
-            inner::Header::Elf32(elf32_header) => elf32_header.r#type.get().try_into().unwrap(),
-            inner::Header::Elf64(elf64_header) => elf64_header.r#type.get().try_into().unwrap(),
+            inner::Header::Elf32(elf32_header) => {
+                elf32_header.r#type.get().try_into().expect(error_msg)
+            }
+            inner::Header::Elf64(elf64_header) => {
+                elf64_header.r#type.get().try_into().expect(error_msg)
+            }
         }
     }
 }

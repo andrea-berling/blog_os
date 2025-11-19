@@ -184,7 +184,7 @@ pub fn __writeln_no_sync(args: core::fmt::Arguments) -> core::fmt::Result {
 #[macro_export]
 macro_rules! vga_writeln_no_sync {
     ($format_string:literal$(, $args:expr)*) => {
-        $crate::vga::__writeln_no_sync(::core::format_args!($format_string $(,$args)*,))
+        $crate::vga::__writeln_no_sync(::core::format_args!($format_string $(,$args)*,)).expect("couldn't write to VGA")
     };
 }
 

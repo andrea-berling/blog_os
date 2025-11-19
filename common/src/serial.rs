@@ -77,6 +77,8 @@ pub enum LineStatusRegisterFlag {
 make_bitmap!(new_type: LineStatusRegisterFlags, underlying_flag_type: LineStatusRegisterFlag, repr: u8, nodisplay);
 
 impl Com1 {
+    /// # Panics
+    /// Uses Self::initialize under the hood, which may panic under certain conditions
     pub fn get() -> Self {
         if !Self::initialized() {
             Self::initialize()
@@ -119,6 +121,9 @@ impl Com1 {
         COM1
     }
 
+    /// # Panics
+    /// Panics if COM1 doesn't exist or doesn't echo back its written char during loopback test
+    /// TODO: Should we make it fallibe with Result instead?
     pub fn initialize() {
         // https://wiki.osdev.org/Serial_Ports#Initialization
         use LineControlRegisterFlag::*;
@@ -132,7 +137,7 @@ impl Com1 {
         unsafe {
             asm!(
                 "out dx, al",
-                "mov al,bh",
+                "mov al, bl",
                 "mov dx,{line_control_register}",
                 "out dx, al",
                 "mov al,3",
@@ -144,8 +149,8 @@ impl Com1 {
                 "mov al,cl",
                 "mov dx,{line_control_register}",
                 "out dx, al",
-                in("al") u8::from(InterruptEnableFlags::empty()),
-                in("dx") Self::interrupt_enable_register(),
+                inout("al") u8::from(InterruptEnableFlags::empty()) => _,
+                inout("dx") Self::interrupt_enable_register() => _,
                 in("bl") u8::from(enable_dlab),
                 line_control_register = const Self::line_control_register(),
                 divisor_register_low = const Self::divisor_register_low(),
@@ -161,8 +166,8 @@ impl Com1 {
                 "mov dx,{transmit_register}",
                 "mov al, 0xae",
                 "out dx, al",
-                in("al") u8::from(loopback),
-                in("dx") Self::modem_control_register(),
+                inout("al") u8::from(loopback) => _,
+                inout("dx") Self::modem_control_register() => _,
                 transmit_register = const Self::transmit_register()
             )
         }

@@ -106,11 +106,13 @@ impl HeaderEntry {
         }
     }
 
+    /// # Panics
+    /// Panics if the type field doesn't contain a valid section type value
     pub(crate) fn r#type(&self) -> SectionEntryType {
-        // PANIC: shouldn't panic, we check the type as soon as the entry is created
+        let error_msg = "type field did not contain a valid ELF object type";
         match &self.0 {
-            inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().unwrap(),
-            inner::HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().unwrap(),
+            inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().expect(error_msg),
+            inner::HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().expect(error_msg),
         }
     }
 
