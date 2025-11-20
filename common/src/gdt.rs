@@ -1,6 +1,38 @@
+use core::mem::size_of;
+
 use num_enum::TryFromPrimitive;
 
 use crate::{make_bitmap, protection::PrivilegeLevel, tss};
+
+macro_rules! impl_descriptor_ops {
+    ($descriptor_type:ty) => {
+        impl $descriptor_type {
+            pub fn set_limit_hi(&mut self, limit_hi: u8) {
+                self.bits &= !0x0f_00;
+                self.bits |= (limit_hi as u16 & 0x0f) << 8;
+            }
+
+            pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
+                self.bits &= !0x60_00;
+                self.bits |= (privilege_level as u16) << 12;
+            }
+        }
+    };
+}
+
+macro_rules! update_flags {
+    ($segment: ident, $update_code: expr) => {{
+        // SAFETY: Reading unaligned data is UB, but the field is a `SegmentDescriptorFlags` which
+        // has an alignment of 1, so this is safe.
+        let mut __flags = unsafe { (&raw const $segment.flags).read_unaligned() };
+        $update_code(&mut __flags);
+        // SAFETY: Writing unaligned data is UB, but the field is a `SegmentDescriptorFlags` which
+        // has an alignment of 1, so this is safe.
+        unsafe {
+            (&raw mut $segment.flags).write_unaligned(__flags);
+        }
+    }};
+}
 
 pub type GDT<const N: usize> = [SegmentDescriptor; N];
 
@@ -19,26 +51,49 @@ impl<const N: usize> From<&'static GDT<N>> for GDTDescriptor {
     }
 }
 
-macro_rules! impl_descriptor_ops {
-    ($descriptor_type:ty) => {
-        impl $descriptor_type {
-            pub fn set_limit_hi(&mut self, limit_hi: u8) {
-                self.bits &= !0x0f_00;
-                self.bits |= (limit_hi as u16 & 0x0f) << 8;
-            }
+#[derive(Clone, Copy, Debug)]
+struct SegmentDescriptorFlags(u16);
 
-            pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-                self.bits &= !0x60_00;
-                self.bits |= (privilege_level as u16) << 12;
-            }
-        }
-    };
+impl SegmentDescriptorFlags {
+    pub fn set_present(&mut self) {
+        let mut flags = SegmentFlags::from(self.0);
+        flags.set_present();
+        *self = flags.into();
+    }
+
+    pub fn set_4k_granularity(&mut self) {
+        let mut flags = SegmentFlags::from(self.0);
+        flags.set_4k_granularity();
+        *self = flags.into();
+    }
+
+    pub fn set_long(&mut self) {
+        let mut flags = SegmentFlags::from(self.0);
+        flags.set_long();
+        *self = flags.into();
+    }
+
+    pub fn set_limit_hi(&mut self, limit_hi: u8) {
+        let mut flags = SegmentFlags::from(self.0);
+        flags.set_limit_hi(limit_hi);
+        *self = flags.into();
+    }
 }
 
-#[repr(u8)]
-enum SegmentType {
-    Data = 0b10,
-    Code = 0b11,
+impl From<SegmentFlags> for SegmentDescriptorFlags {
+    fn from(value: SegmentFlags) -> Self {
+        match value {
+            SegmentFlags::Code(code_segment_descriptor_flags) => {
+                Self(u16::from(code_segment_descriptor_flags))
+            }
+            SegmentFlags::Data(data_segment_descriptor_flags) => {
+                Self(u16::from(data_segment_descriptor_flags))
+            }
+            SegmentFlags::Task(task_segment_descriptor_flags) => {
+                Self(u16::from(task_segment_descriptor_flags))
+            }
+        }
+    }
 }
 
 #[allow(unused)]
@@ -86,6 +141,17 @@ pub enum TaskSegmentDescriptorBit {
 
 make_bitmap!(new_type: TaskSegmentDescriptorFlags, underlying_flag_type: TaskSegmentDescriptorBit, repr: u16, nodisplay);
 impl_descriptor_ops!(TaskSegmentDescriptorFlags);
+
+#[repr(u8)]
+enum SegmentType {
+    Data = 0b10,
+    Code = 0b11,
+}
+
+pub enum SegmentKind {
+    Code,
+    Data,
+}
 
 enum SegmentFlags {
     Code(CodeSegmentDescriptorFlags),
@@ -196,51 +262,6 @@ impl SegmentFlags {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SegmentDescriptorFlags(u16);
-
-impl From<SegmentFlags> for SegmentDescriptorFlags {
-    fn from(value: SegmentFlags) -> Self {
-        match value {
-            SegmentFlags::Code(code_segment_descriptor_flags) => {
-                Self(u16::from(code_segment_descriptor_flags))
-            }
-            SegmentFlags::Data(data_segment_descriptor_flags) => {
-                Self(u16::from(data_segment_descriptor_flags))
-            }
-            SegmentFlags::Task(task_segment_descriptor_flags) => {
-                Self(u16::from(task_segment_descriptor_flags))
-            }
-        }
-    }
-}
-
-impl SegmentDescriptorFlags {
-    pub fn set_present(&mut self) {
-        let mut flags = SegmentFlags::from(self.0);
-        flags.set_present();
-        *self = flags.into();
-    }
-
-    pub fn set_4k_granularity(&mut self) {
-        let mut flags = SegmentFlags::from(self.0);
-        flags.set_4k_granularity();
-        *self = flags.into();
-    }
-
-    pub fn set_long(&mut self) {
-        let mut flags = SegmentFlags::from(self.0);
-        flags.set_long();
-        *self = flags.into();
-    }
-
-    pub fn set_limit_hi(&mut self, limit_hi: u8) {
-        let mut flags = SegmentFlags::from(self.0);
-        flags.set_limit_hi(limit_hi);
-        *self = flags.into();
-    }
-}
-
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct SegmentDescriptor {
@@ -249,25 +270,6 @@ pub struct SegmentDescriptor {
     base_mid: u8,
     flags: SegmentDescriptorFlags,
     base_hi: u8,
-}
-
-macro_rules! update_flags {
-    ($segment: ident, $update_code: expr) => {{
-        // SAFETY: Reading unaligned data is UB, but the field is a `SegmentDescriptorFlags` which
-        // has an alignment of 1, so this is safe.
-        let mut __flags = unsafe { (&raw const $segment.flags).read_unaligned() };
-        $update_code(&mut __flags);
-        // SAFETY: Writing unaligned data is UB, but the field is a `SegmentDescriptorFlags` which
-        // has an alignment of 1, so this is safe.
-        unsafe {
-            (&raw mut $segment.flags).write_unaligned(__flags);
-        }
-    }};
-}
-
-pub enum SegmentKind {
-    Code,
-    Data,
 }
 
 impl SegmentDescriptor {

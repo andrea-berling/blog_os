@@ -132,6 +132,7 @@ struct InitializationParameters {
     code_selector: usize,
 }
 
+#[cfg(target_os = "none")]
 fn init(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,

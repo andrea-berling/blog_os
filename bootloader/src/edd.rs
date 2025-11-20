@@ -3,7 +3,7 @@
 // http://www.o3one.org/hwdocs/bios_doc/bios_specs_edd30.pdf
 use core::fmt::Display;
 
-use common::error::{Context, Error, Facility, Fault};
+use common::error::{Error, Facility, Fault};
 use common::make_bitmap;
 
 use common::error::try_read_error;
@@ -209,7 +209,7 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 }
                 HostBus::Isa { base_address }
             }
-            bytes => {
+            _ => {
                 return Err(Error::parsing_error(
                     Fault::InvalidValueForField("host bus type"),
                     Facility::EDDDevicePathInformation,
@@ -327,6 +327,40 @@ pub struct DriveParameters {
     bytes_per_sector: u16,
     fixed_disk_parameter_table: Option<FixedDiskParameterTable>,
     device_path_information: Option<DevicePathInformation>,
+}
+
+impl DriveParameters {
+    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
+        try_read_error(Facility::EDDDriveParameters, err)
+    }
+
+    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> Result<(), Error> {
+        if fdbt_address == u32::MAX {
+            // Nothing to do, the fdbt address is invalid
+            return Ok(());
+        }
+
+        if self.buffer_size != 30 {
+            return Err(Error::parsing_error(
+                Fault::NotEnoughBytesFor("fixed disk parameter table"),
+                Facility::EDDFixedDiskParameterTable,
+            ));
+        }
+        // Address is in seg:offset format, with offset coming first
+        fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
+
+        self.fixed_disk_parameter_table = Some(FixedDiskParameterTable::try_from(
+            //SAFETY: If we got to this point, the fdbt address is valid and points to a
+            //FixedDiskParameterTableRaw sized byte array
+            unsafe {
+                core::slice::from_raw_parts(
+                    fdbt_address as *const u8,
+                    size_of::<FixedDiskParameterTableRaw>(),
+                )
+            },
+        )?);
+        Ok(())
+    }
 }
 
 impl Display for DriveParameters {
@@ -484,40 +518,6 @@ impl TryFrom<&[u8]> for DriveParameters {
         }
 
         Ok(result)
-    }
-}
-
-impl DriveParameters {
-    fn try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
-        try_read_error(Facility::EDDDriveParameters, err)
-    }
-
-    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> Result<(), Error> {
-        if fdbt_address == u32::MAX {
-            // Nothing to do, the fdbt address is invalid
-            return Ok(());
-        }
-
-        if self.buffer_size != 30 {
-            return Err(Error::parsing_error(
-                Fault::NotEnoughBytesFor("fixed disk parameter table"),
-                Facility::EDDFixedDiskParameterTable,
-            ));
-        }
-        // Address is in seg:offset format, with offset coming first
-        fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
-
-        self.fixed_disk_parameter_table = Some(FixedDiskParameterTable::try_from(
-            //SAFETY: If we got to this point, the fdbt address is valid and points to a
-            //FixedDiskParameterTableRaw sized byte array
-            unsafe {
-                core::slice::from_raw_parts(
-                    fdbt_address as *const u8,
-                    size_of::<FixedDiskParameterTableRaw>(),
-                )
-            },
-        )?);
-        Ok(())
     }
 }
 

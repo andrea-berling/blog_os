@@ -5,7 +5,7 @@ use core::arch::x86_64::__cpuid;
 use core::cmp::min;
 
 use crate::{
-    error::{Error, Fault, Feature},
+    error::{Fault, Feature},
     make_bitmap,
 };
 

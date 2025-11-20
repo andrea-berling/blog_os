@@ -1,11 +1,13 @@
 use core::{fmt::Display, str::Utf8Error};
 
-use crate::elf::{self, Halfword, Word, header};
+use num_enum::TryFromPrimitive;
+use zerocopy::TryFromBytes;
 
-use crate::error::Facility;
-use crate::error::{Fault, try_read_error};
-use crate::make_bitmap;
-use elf::Error;
+use crate::{
+    elf::{Halfword, Word, header},
+    error::{Error, Facility, Fault, try_read_error},
+    make_bitmap,
+};
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U32, U64};
@@ -51,6 +53,142 @@ mod inner {
 
 pub const ELF32_ENTRY_SIZE: usize = size_of::<inner::Elf32HeaderEntry>();
 pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
+
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug)]
+#[repr(u32)]
+pub(crate) enum SectionEntryType {
+    Null = 0,
+    Progbits = 1,
+    Symtab = 2,
+    Strtab = 3,
+    Rela = 4,
+    Hash = 5,
+    Dynamic = 6,
+    Note = 7,
+    NoBits = 8,
+    Rel = 9,
+    Shlib = 10,
+    DynSym = 11,
+    InitArray = 14,
+    FiniArray = 15,
+    PreinitArray = 16,
+    Group = 17,
+    SymtabIndex = 18,
+    OsSpecific(u32),
+    ProcessorSpecific(u32),
+    UserSpecific(u32),
+}
+
+impl TryFrom<Word> for SectionEntryType {
+    type Error = Word;
+
+    fn try_from(value: Word) -> core::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(SectionEntryType::Null),
+            1 => Ok(SectionEntryType::Progbits),
+            2 => Ok(SectionEntryType::Symtab),
+            3 => Ok(SectionEntryType::Strtab),
+            4 => Ok(SectionEntryType::Rela),
+            5 => Ok(SectionEntryType::Hash),
+            6 => Ok(SectionEntryType::Dynamic),
+            7 => Ok(SectionEntryType::Note),
+            8 => Ok(SectionEntryType::NoBits),
+            9 => Ok(SectionEntryType::Rel),
+            10 => Ok(SectionEntryType::Shlib),
+            11 => Ok(SectionEntryType::DynSym),
+            14 => Ok(SectionEntryType::InitArray),
+            15 => Ok(SectionEntryType::FiniArray),
+            16 => Ok(SectionEntryType::PreinitArray),
+            17 => Ok(SectionEntryType::Group),
+            18 => Ok(SectionEntryType::SymtabIndex),
+            v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
+            v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
+            v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
+            _ => Err(value),
+        }
+    }
+}
+
+impl Display for SectionEntryType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SectionEntryType::Null => write!(f, "NULL"),
+            SectionEntryType::Progbits => write!(f, "PROGBITS"),
+            SectionEntryType::Symtab => write!(f, "SYMTAB"),
+            SectionEntryType::Strtab => write!(f, "STRTAB"),
+            SectionEntryType::Rela => write!(f, "RELA"),
+            SectionEntryType::Hash => write!(f, "HASH"),
+            SectionEntryType::Dynamic => write!(f, "DYNAMIC"),
+            SectionEntryType::Note => write!(f, "NOTE"),
+            SectionEntryType::NoBits => write!(f, "NOBITS"),
+            SectionEntryType::Rel => write!(f, "REL"),
+            SectionEntryType::Shlib => write!(f, "SHLIB"),
+            SectionEntryType::DynSym => write!(f, "DYNSYM"),
+            SectionEntryType::InitArray => write!(f, "INIT_ARRAY"),
+            SectionEntryType::FiniArray => write!(f, "FINI_ARRAY"),
+            SectionEntryType::PreinitArray => write!(f, "PREINIT_ARRAY"),
+            SectionEntryType::Group => write!(f, "GROUP"),
+            SectionEntryType::SymtabIndex => write!(f, "SYMTAB_INDEX"),
+            SectionEntryType::OsSpecific(value) => {
+                write!(f, "OS_SPECIFIC({value:#x})")
+            }
+            SectionEntryType::ProcessorSpecific(value) => {
+                write!(f, "PROCESSOR_SPECIFIC({value:#x})")
+            }
+            SectionEntryType::UserSpecific(value) => {
+                write!(f, "USER_SPECIFIC({value:#x})")
+            }
+        }
+    }
+}
+
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u32)]
+pub enum FlagType {
+    Writeable = 0x1,
+    Allocated = 0x2,
+    ExecutableInstructions = 0x4,
+    Merge = 0x10,
+    Strings = 0x20,
+    InfoLink = 0x40,
+    LinkOrder = 0x80,
+    OsNonconforming = 0x100,
+    InGroup = 0x200,
+    Tls = 0x400,
+}
+
+impl Display for FlagType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FlagType::Writeable => write!(f, "WRITEABLE"),
+            FlagType::Allocated => write!(f, "ALLOCATED"),
+            FlagType::ExecutableInstructions => write!(f, "EXECUTABLE_INSTRUCTIONS"),
+            FlagType::Merge => write!(f, "MERGE"),
+            FlagType::Strings => write!(f, "STRINGS"),
+            FlagType::InfoLink => write!(f, "INFO_LINK"),
+            FlagType::LinkOrder => write!(f, "LINK_ORDER"),
+            FlagType::OsNonconforming => write!(f, "OS_NONCONFORMING"),
+            FlagType::InGroup => write!(f, "IN_GROUP"),
+            FlagType::Tls => write!(f, "TLS"),
+        }
+    }
+}
+
+make_bitmap!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
+
+#[derive(Debug)]
+pub enum Section<'a> {
+    StringTable(&'a [u8]),
+}
+
+impl<'a> Section<'a> {
+    pub fn downcast_to_string_table(&self) -> Result<StringTable<'a>, Facility> {
+        match self {
+            Section::StringTable(items) => Ok(StringTable(items)),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct HeaderEntry(inner::HeaderEntry);
@@ -216,161 +354,10 @@ impl HeaderEntry {
     }
 }
 
-#[cfg_attr(test, derive(PartialEq, Eq))]
-#[derive(Debug)]
-#[repr(u32)]
-pub(crate) enum SectionEntryType {
-    Null = 0,
-    Progbits = 1,
-    Symtab = 2,
-    Strtab = 3,
-    Rela = 4,
-    Hash = 5,
-    Dynamic = 6,
-    Note = 7,
-    NoBits = 8,
-    Rel = 9,
-    Shlib = 10,
-    DynSym = 11,
-    InitArray = 14,
-    FiniArray = 15,
-    PreinitArray = 16,
-    Group = 17,
-    SymtabIndex = 18,
-    OsSpecific(u32),
-    ProcessorSpecific(u32),
-    UserSpecific(u32),
-}
-
-impl TryFrom<Word> for SectionEntryType {
-    type Error = Word;
-
-    fn try_from(value: Word) -> core::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(SectionEntryType::Null),
-            1 => Ok(SectionEntryType::Progbits),
-            2 => Ok(SectionEntryType::Symtab),
-            3 => Ok(SectionEntryType::Strtab),
-            4 => Ok(SectionEntryType::Rela),
-            5 => Ok(SectionEntryType::Hash),
-            6 => Ok(SectionEntryType::Dynamic),
-            7 => Ok(SectionEntryType::Note),
-            8 => Ok(SectionEntryType::NoBits),
-            9 => Ok(SectionEntryType::Rel),
-            10 => Ok(SectionEntryType::Shlib),
-            11 => Ok(SectionEntryType::DynSym),
-            14 => Ok(SectionEntryType::InitArray),
-            15 => Ok(SectionEntryType::FiniArray),
-            16 => Ok(SectionEntryType::PreinitArray),
-            17 => Ok(SectionEntryType::Group),
-            18 => Ok(SectionEntryType::SymtabIndex),
-            v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
-            v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
-            v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
-            _ => Err(value),
-        }
-    }
-}
-
-impl Display for SectionEntryType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SectionEntryType::Null => write!(f, "NULL"),
-            SectionEntryType::Progbits => write!(f, "PROGBITS"),
-            SectionEntryType::Symtab => write!(f, "SYMTAB"),
-            SectionEntryType::Strtab => write!(f, "STRTAB"),
-            SectionEntryType::Rela => write!(f, "RELA"),
-            SectionEntryType::Hash => write!(f, "HASH"),
-            SectionEntryType::Dynamic => write!(f, "DYNAMIC"),
-            SectionEntryType::Note => write!(f, "NOTE"),
-            SectionEntryType::NoBits => write!(f, "NOBITS"),
-            SectionEntryType::Rel => write!(f, "REL"),
-            SectionEntryType::Shlib => write!(f, "SHLIB"),
-            SectionEntryType::DynSym => write!(f, "DYNSYM"),
-            SectionEntryType::InitArray => write!(f, "INIT_ARRAY"),
-            SectionEntryType::FiniArray => write!(f, "FINI_ARRAY"),
-            SectionEntryType::PreinitArray => write!(f, "PREINIT_ARRAY"),
-            SectionEntryType::Group => write!(f, "GROUP"),
-            SectionEntryType::SymtabIndex => write!(f, "SYMTAB_INDEX"),
-            SectionEntryType::OsSpecific(value) => {
-                write!(f, "OS_SPECIFIC({value:#x})")
-            }
-            SectionEntryType::ProcessorSpecific(value) => {
-                write!(f, "PROCESSOR_SPECIFIC({value:#x})")
-            }
-            SectionEntryType::UserSpecific(value) => {
-                write!(f, "USER_SPECIFIC({value:#x})")
-            }
-        }
-    }
-}
-
-make_bitmap!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
-
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u32)]
-pub enum FlagType {
-    Writeable = 0x1,
-    Allocated = 0x2,
-    ExecutableInstructions = 0x4,
-    Merge = 0x10,
-    Strings = 0x20,
-    InfoLink = 0x40,
-    LinkOrder = 0x80,
-    OsNonconforming = 0x100,
-    InGroup = 0x200,
-    Tls = 0x400,
-}
-
-impl Display for FlagType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            FlagType::Writeable => write!(f, "WRITEABLE"),
-            FlagType::Allocated => write!(f, "ALLOCATED"),
-            FlagType::ExecutableInstructions => write!(f, "EXECUTABLE_INSTRUCTIONS"),
-            FlagType::Merge => write!(f, "MERGE"),
-            FlagType::Strings => write!(f, "STRINGS"),
-            FlagType::InfoLink => write!(f, "INFO_LINK"),
-            FlagType::LinkOrder => write!(f, "LINK_ORDER"),
-            FlagType::OsNonconforming => write!(f, "OS_NONCONFORMING"),
-            FlagType::InGroup => write!(f, "IN_GROUP"),
-            FlagType::Tls => write!(f, "TLS"),
-        }
-    }
-}
-
 pub struct SectionHeaderEntries<'a> {
     bytes: &'a [u8],
     class: header::Class,
     bytes_read_so_far: usize,
-}
-use num_enum::TryFromPrimitive;
-use zerocopy::TryFromBytes;
-
-impl<'a> Iterator for SectionHeaderEntries<'a> {
-    type Item = Result<HeaderEntry, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.bytes_read_so_far >= self.bytes.len() {
-            return None;
-        }
-
-        let entry_size = match self.class {
-            header::Class::Elf32 => ELF32_ENTRY_SIZE,
-            header::Class::Elf64 => ELF64_ENTRY_SIZE,
-        };
-
-        Some(
-            HeaderEntry::try_from_bytes(
-                self.bytes.get(self.bytes_read_so_far..)?,
-                self.class,
-                Facility::ElfSectionHeaderEntry(entry_size as Halfword),
-            )
-            .inspect(|_| {
-                self.bytes_read_so_far += entry_size;
-            }),
-        )
-    }
 }
 
 impl<'a> SectionHeaderEntries<'a> {
@@ -398,16 +385,29 @@ impl<'a> SectionHeaderEntries<'a> {
     }
 }
 
-#[derive(Debug)]
-pub enum Section<'a> {
-    StringTable(&'a [u8]),
-}
+impl<'a> Iterator for SectionHeaderEntries<'a> {
+    type Item = Result<HeaderEntry, Error>;
 
-impl<'a> Section<'a> {
-    pub fn downcast_to_string_table(&self) -> Result<StringTable<'a>, Facility> {
-        match self {
-            Section::StringTable(items) => Ok(StringTable(items)),
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bytes_read_so_far >= self.bytes.len() {
+            return None;
         }
+
+        let entry_size = match self.class {
+            header::Class::Elf32 => ELF32_ENTRY_SIZE,
+            header::Class::Elf64 => ELF64_ENTRY_SIZE,
+        };
+
+        Some(
+            HeaderEntry::try_from_bytes(
+                self.bytes.get(self.bytes_read_so_far..)?,
+                self.class,
+                Facility::ElfSectionHeaderEntry(entry_size as Halfword),
+            )
+            .inspect(|_| {
+                self.bytes_read_so_far += entry_size;
+            }),
+        )
     }
 }
 
@@ -427,12 +427,12 @@ impl<'a> StringTable<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::elf::{
-        error,
-        section::{
+    use crate::{
+        elf::section::{
             FlagType, Flags, HeaderEntry, SectionEntryType,
             inner::{Elf32HeaderEntry, Elf64HeaderEntry},
         },
+        error::Facility,
     };
 
     const NULL_HEADER_64_BIT: [u8; size_of::<Elf64HeaderEntry>()] = [
@@ -544,7 +544,7 @@ mod tests {
         let mut header = HeaderEntry::try_from_bytes(
             &NULL_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(0, header.name_index());
@@ -561,7 +561,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &PROGBITS_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(1, header.name_index());
@@ -578,7 +578,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &NOTE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(9, header.name_index());
@@ -595,7 +595,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &DYNSYM_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(42, header.name_index());
@@ -612,7 +612,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &OS_SPECIFIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(50, header.name_index());
@@ -629,7 +629,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &STRING_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(88, header.name_index());
@@ -646,7 +646,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RELA_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(96, header.name_index());
@@ -663,7 +663,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RELA_PLT_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(106, header.name_index());
@@ -680,7 +680,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RODATA_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(135, header.name_index());
@@ -700,7 +700,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &TEXT_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(185, header.name_index());
@@ -720,7 +720,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &GOT_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(267, header.name_index());
@@ -737,7 +737,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &BSS_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(318, header.name_index());
@@ -754,7 +754,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &SYMBOL_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(458, header.name_index());
@@ -810,7 +810,7 @@ mod tests {
         let mut header = HeaderEntry::try_from_bytes(
             &NULL_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(0, header.name_index());
@@ -827,7 +827,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &TEXT_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(1, header.name_index());
@@ -847,7 +847,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RODATA_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(7, header.name_index());
@@ -867,7 +867,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &BSS_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(15, header.name_index());
@@ -884,7 +884,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &SYMBOL_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(20, header.name_index());
@@ -901,7 +901,7 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &STRING_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            error::Facility::SectionHeader,
+            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(28, header.name_index());
@@ -916,3 +916,4 @@ mod tests {
         assert_eq!(0, header.entry_size());
     }
 }
+

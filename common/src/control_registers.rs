@@ -2,7 +2,7 @@ use core::arch::asm;
 
 // https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf
 use crate::{
-    error::{Error, Fault, bounded_context},
+    error::{Fault, bounded_context},
     make_bitmap, paging,
 };
 

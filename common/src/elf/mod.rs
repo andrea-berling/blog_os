@@ -4,9 +4,7 @@ pub mod header;
 pub mod program_header;
 pub mod section;
 
-use crate::error::Error;
-use crate::error::Facility;
-use crate::error::Fault;
+use crate::error::{Error, Facility, Fault};
 
 type Halfword = u16;
 type Word = u32;
@@ -129,3 +127,5 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
         })
     }
 }
+
+
