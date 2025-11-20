@@ -1,5 +1,10 @@
+use core::arch::asm;
+
 // https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf
-use crate::{error::bounded_context, make_bitmap, paging};
+use crate::{
+    error::{Error, Fault, bounded_context},
+    make_bitmap, paging,
+};
 
 #[allow(unused)]
 #[repr(u32)]
@@ -30,10 +35,10 @@ pub enum ControlRegister3Bit {
 make_bitmap!(new_type: ControlRegister3, underlying_flag_type: ControlRegister3Bit, repr: u64, nodisplay);
 
 impl ControlRegister3 {
-    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> Result<(), crate::error::Reason> {
+    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> Result<(), Fault> {
         let address = pml4 as *const _ as u64;
         if !address.is_multiple_of(0x1000) {
-            return Err(crate::error::Reason::InvalidAddressForType {
+            return Err(Fault::InvalidAddressForType {
                 address,
                 dst_type_prefix: bounded_context(core::any::type_name::<paging::PML4>().as_bytes()),
                 alignment: 0x1000,
@@ -78,7 +83,33 @@ pub enum ControlRegister4Bit {
 
 make_bitmap!(new_type: ControlRegister4, underlying_flag_type: ControlRegister4Bit, repr: u32, nodisplay);
 
-pub const EXTENDED_FEATURE_ENABLE_REGISTER_MSR_INDEX: u32 = 0xC000_0080;
+#[repr(u32)]
+pub enum Msr {
+    Efer(ExtendedFeatureEnableRegister) = 0xC000_0080,
+}
+
+pub fn wrmsr(msr: &Msr) {
+    // SAFETY: Msr has a primitive representation which allows pointer casting to retrieve the
+    // discriminant
+    let register_index = unsafe { *(msr as *const Msr as *const u32) };
+
+    let (low, high) = match msr {
+        Msr::Efer(extended_feature_enable_register) => {
+            let bits = u64::from(*extended_feature_enable_register);
+            (bits as u32, (bits >> 32) as u32)
+        }
+    };
+
+    // SAFETY: The validity of the value for the given MSR is guaranteed by the type signature
+    unsafe {
+        asm!(
+          "wrmsr",
+          in("eax") low,
+          in("edx") high,
+          in("ecx") register_index,
+        )
+    }
+}
 
 #[allow(unused)]
 #[repr(u64)]

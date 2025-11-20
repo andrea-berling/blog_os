@@ -1,24 +1,9 @@
 use core::arch::asm;
 
 use crate::{
-    error::{Kind, Reason},
+    error::{Context, Error, Facility, Fault},
     make_bitmap, timer,
 };
-
-mod error {
-    use thiserror::Error;
-
-    use crate::ata::Device;
-
-    #[derive(Error, Debug, Clone, Copy)]
-    pub enum Facility {
-        #[error("Ata Device: ({0:?})")]
-        AtaDevice(Device),
-    }
-
-    pub(crate) type Result<T> = crate::error::Result<T, Facility>;
-    pub(crate) type Error = crate::error::Error<Facility>;
-}
 
 // https://wiki.osdev.org/ATA_PIO_Mode#400ns_delays
 const COURTESY_DELAY_NS: u64 = 400;
@@ -177,12 +162,12 @@ impl Device {
         self.control_port_base_address + 1
     }
 
-    fn io_error(&self, kind: Kind) -> error::Error {
-        crate::error::Error::InternalError(crate::error::InternalError::new(
-            error::Facility::AtaDevice(*self),
-            kind,
-            crate::error::Context::Io,
-        ))
+    fn io_error(&self, fault: Fault) -> Error {
+        Error::new(
+            fault,
+            Context::Io,
+            Facility::AtaDevice(self.io_port_base_address),
+        )
     }
 
     fn courtesy_delay() {
@@ -220,26 +205,26 @@ impl Device {
         status.is_set(ReadyForSendReceive) && !status.is_set(BusyPreparingToSendReceive)
     }
 
-    fn wait_for_readiness(&self, timeout_ns: u64) -> error::Result<()> {
+    fn wait_for_readiness(&self, timeout_ns: u64) -> Result<(), Error> {
         Self::courtesy_delay();
         let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
         while !self.ready_for_command() && !timeout_timer.timeout() {
             timeout_timer.update();
         }
         if timeout_timer.timeout() && !self.ready_for_command() {
-            return Err(self.io_error(Kind::Timeout(Reason::AtaDeviceNotReady)));
+            return Err(self.io_error(Fault::Timeout(timeout_ns)));
         }
         Ok(())
     }
 
-    fn poll_for_reads(&self, timeout_ns: u64) -> error::Result<()> {
+    fn poll_for_reads(&self, timeout_ns: u64) -> Result<(), Error> {
         Self::courtesy_delay();
         let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
         while !self.has_data_to_send() && !timeout_timer.timeout() {
             timeout_timer.update();
         }
         if timeout_timer.timeout() && !self.has_data_to_send() {
-            return Err(self.io_error(Kind::Timeout(Reason::HangingAtaDevice)));
+            return Err(self.io_error(Fault::Timeout(timeout_ns)));
         }
         Ok(())
     }
@@ -249,13 +234,13 @@ impl Device {
         sector_count: u8,
         lba_address: u32,
         output_buffer: &mut [u8],
-    ) -> error::Result<()> {
+    ) -> Result<(), Error> {
         if lba_address as u64 >= self.sectors {
-            return Err(self.io_error(Kind::InvalidLBAAddress(lba_address.into(), self.sectors)));
+            return Err(self.io_error(Fault::InvalidLBAAddress(lba_address.into(), self.sectors)));
         }
 
         if (output_buffer.len() as u64) < (sector_count as u64 * self.sector_size_bytes as u64) {
-            return Err(self.io_error(Kind::CantReadIntoBuffer(
+            return Err(self.io_error(Fault::CantReadIntoBuffer(
                 output_buffer.len() as u64,
                 sector_count as u64 * self.sector_size_bytes as u64,
             )));

@@ -1,15 +1,9 @@
 use core::{fmt::Display, str::Utf8Error};
 
-use crate::elf::error::Facility;
 use crate::elf::{self, Halfword, Word, header};
 
-use crate::error::Context;
-use crate::error::InternalError;
-use crate::error::Kind;
-use crate::error::Kind::*;
-use crate::error::Reason;
-use crate::error::Result;
-use crate::error::try_read_error;
+use crate::error::Facility;
+use crate::error::{Fault, try_read_error};
 use crate::make_bitmap;
 use elf::Error;
 
@@ -62,24 +56,24 @@ pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
 pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: Facility) -> Error {
-        Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
-    }
-
     pub(crate) fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
-        facility: elf::error::Facility,
-    ) -> Result<Self, Facility> {
+        facility: Facility,
+    ) -> Result<Self, Error> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
                 .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
-                    match SectionEntryType::try_from(type_halfword) {
-                        Ok(_) => Ok(header_entry),
-                        Err(err) => Err(Self::error(CantReadField("type", err), facility)),
+                    if SectionEntryType::try_from(type_halfword).is_ok() {
+                        Ok(header_entry)
+                    } else {
+                        Err(Error::parsing_error(
+                            Fault::InvalidValueForField("type"),
+                            facility,
+                        ))
                     }
                 })
                 .map(inner::HeaderEntry::Elf32)
@@ -89,9 +83,13 @@ impl HeaderEntry {
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
-                    match SectionEntryType::try_from(type_halfword) {
-                        Ok(_) => Ok(header_entry),
-                        Err(err) => Err(Self::error(CantReadField("type", err), facility)),
+                    if SectionEntryType::try_from(type_halfword).is_ok() {
+                        Ok(header_entry)
+                    } else {
+                        Err(Error::parsing_error(
+                            Fault::InvalidValueForField("type"),
+                            facility,
+                        ))
                     }
                 })
                 .map(inner::HeaderEntry::Elf64)
@@ -165,7 +163,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> Result<Section<'b>, Facility>
+    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> Result<Section<'b>, Error>
     where
         'b: 'a,
     {
@@ -206,7 +204,7 @@ impl HeaderEntry {
 
     /// Print out the header using the given writer
     /// String formatting is considered infallible,
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> Result<(), Facility> {
+    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> core::fmt::Result {
         writeln!(writer, "Name index: {}", self.name_index())?;
         writeln!(writer, "Type: {}", self.r#type())?;
         writeln!(writer, "Address: {:#x}", self.address())?;
@@ -245,7 +243,7 @@ pub(crate) enum SectionEntryType {
 }
 
 impl TryFrom<Word> for SectionEntryType {
-    type Error = Reason;
+    type Error = Word;
 
     fn try_from(value: Word) -> core::result::Result<Self, Self::Error> {
         match value {
@@ -269,7 +267,7 @@ impl TryFrom<Word> for SectionEntryType {
             v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
             v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
             v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
-            _ => Err(Reason::InvalidValue(value as u64)),
+            _ => Err(value),
         }
     }
 }
@@ -350,7 +348,7 @@ use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;
 
 impl<'a> Iterator for SectionHeaderEntries<'a> {
-    type Item = Result<HeaderEntry, Facility>;
+    type Item = Result<HeaderEntry, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -366,7 +364,7 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
             HeaderEntry::try_from_bytes(
                 self.bytes.get(self.bytes_read_so_far..)?,
                 self.class,
-                elf::error::Facility::SectionHeaderEntry(entry_size as Halfword),
+                Facility::ElfSectionHeaderEntry(entry_size as Halfword),
             )
             .inspect(|_| {
                 self.bytes_read_so_far += entry_size;
@@ -376,25 +374,20 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
 }
 
 impl<'a> SectionHeaderEntries<'a> {
-    fn error(kind: Kind) -> Error {
-        Error::InternalError(InternalError::new(
-            elf::error::Facility::SectionHeader,
-            kind,
-            Context::Parsing,
-        ))
-    }
-
     pub(crate) fn new(
         bytes: &'a [u8],
         class: header::Class,
         n_entries: Halfword,
-    ) -> Result<Self, Facility> {
+    ) -> Result<Self, Error> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
         };
         if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
-            return Err(Self::error(CantFit("sections")));
+            return Err(Error::parsing_error(
+                Fault::NotEnoughBytesFor("sections"),
+                Facility::ElfSectionHeader,
+            ));
         }
 
         Ok(Self {

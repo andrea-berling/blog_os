@@ -1,18 +1,12 @@
 // https://refspecs.linuxfoundation.org/elf/gabi4+/ch4.eheader.html#elfid
 
-use crate::elf::error::Facility;
-
-mod error;
 pub mod header;
 pub mod program_header;
 pub mod section;
 
-use crate::error::Context;
-use crate::error::InternalError;
-use crate::error::Kind;
-use crate::error::Kind::*;
-use crate::error::Result;
-pub use error::Error;
+use crate::error::Error;
+use crate::error::Facility;
+use crate::error::Fault;
 
 type Halfword = u16;
 type Word = u32;
@@ -23,10 +17,6 @@ pub struct File<'a> {
 }
 
 impl<'a> File<'a> {
-    fn error(kind: Kind) -> Error {
-        error::Error::InternalError(InternalError::new(Facility::File, kind, Context::Parsing))
-    }
-
     /// # Panics
     /// Will panic if the size of the ELF file was not validated to contain enough bytes for the
     /// section header, and if that state wasn't preserved
@@ -60,12 +50,12 @@ impl<'a> File<'a> {
     pub fn get_section_by_index(
         &self,
         index: usize,
-    ) -> Option<Result<section::Section<'_>, Facility>> {
+    ) -> Option<Result<section::Section<'_>, Error>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
 
-        let error_reporting_facility = error::Facility::SectionHeaderEntry(index as Halfword);
+        let error_reporting_facility = Facility::ElfSectionHeaderEntry(index as Halfword);
 
         match section::HeaderEntry::try_from_bytes(
             self.bytes.get(
@@ -115,7 +105,10 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.section_header_entry_size()
                         * result.header.section_header_entries()) as u64) as usize
         {
-            return Err(Self::error(CantFit("section header")));
+            return Err(Error::parsing_error(
+                Fault::NotEnoughBytesFor("section header"),
+                Facility::ElfFile,
+            ));
         }
 
         if result.bytes.len() < result.header.program_header_offset() as usize
@@ -124,7 +117,10 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.program_header_entry_size()
                         * result.header.program_header_entries()) as u64) as usize
         {
-            return Err(Self::error(CantFit("program header")));
+            return Err(Error::parsing_error(
+                Fault::NotEnoughBytesFor("program header"),
+                Facility::ElfFile,
+            ));
         }
 
         Ok(Self {

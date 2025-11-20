@@ -6,12 +6,10 @@
 #![deny(clippy::unwrap_used)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
+use common::elf::program_header::ProgramHeaderEntryType;
 use core::arch::{asm, naked_asm};
 
 mod edd;
-mod error;
-
-use error::Facility::Bootloader;
 
 #[cfg(target_os = "none")]
 use core::panic::PanicInfo;
@@ -21,8 +19,8 @@ use common::{
     control_registers::{
         self, ControlRegister0, ControlRegister3, ControlRegister4, ExtendedFeatureEnableRegister,
     },
-    elf::{self, program_header::ProgramHeaderEntryType},
-    error::{Context, InternalError, Kind, Reason},
+    elf::{self},
+    error::{self, Context, Error, Facility, Fault},
     gdt::{self, SegmentDescriptor},
     idt,
     paging::{self},
@@ -53,53 +51,36 @@ pub extern "cdecl" fn start(
     _edd_version: u32,
     _extensions_bitmap: u32,
 ) -> ! {
+    use common::control_registers::{Msr, wrmsr};
+
     vga::writeln_no_sync!("Hello from stage2!");
 
-    let kernel = load_kernel_from_boot_disk(
+    let initialization_parameters = init(
         drive_parameters_pointer,
         stage2_sectors,
         kernel_sectors,
         stack_start,
     )
-    .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
-    .expect("failed loading kernel from boot disk into memory");
-    vga::writeln_no_sync!("Read kernel from disk!");
+    .inspect_err(|err| {
+        error::push_to_global_error_chain_no_sync(*err);
+        error::push_to_global_error_chain_no_sync(Error::new(
+            Fault::KernelInitialization,
+            Context::PreparingForJumpToKernel,
+            Facility::Bootloader,
+        ));
+        vga::writeln_no_sync!("{:}", error::get_global_error_chain_no_sync());
+        use common::serial;
+        use core::fmt::Write;
 
-    let entrypoint = kernel.header().entrypoint();
-
-    if entrypoint >= u32::MAX as u64 {
-        panic!(
-            "ERROR: the kernel entrypoint can not be above the 4GB limit of legacy mode, got: {:#x}",
-            entrypoint
-        );
-    }
-
-    // FIXME: what if the size of all statics in the kernel gets larger that 1MB? One should
-    // probably find the highest address mapped for the kernel, and add 1MB to that
-    // 1MB of stack + heap should be enough for the first stage of the kernel, right?
-    let stack_pointer: u32 = entrypoint
-        .next_multiple_of(0x100000)
-        .try_into()
-        .inspect_err(|_| {
-            vga::writeln_no_sync!(
-                "Kernel entrypoint too high for a stack of 1MB: entrypoint={entrypoint:#x}"
-            )
-        })
-        .expect("Kernel entrypoint too high for a stack of 1MB");
-
-    load_segments_into_memory(&kernel)
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
-        .expect("failed to load kernel segments into memory");
-    vga::writeln_no_sync!("Loaded kernel segments into memory!");
-
-    setup_page_tables()
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
-        .expect("failed to set up page tables");
-
-    setup_global_descriptor_table();
-    //setup_debug_interrupt_descriptor_table();
-    let (cr0, cr3, cr4, efer) = setup_control_registers()
-        .expect("failed setting up control registers CR0, CR3, CR4, and EFER");
+        let mut serial_writer = serial::Com1::get();
+        writeln!(
+            serial_writer,
+            "{:#}",
+            error::get_global_error_chain_no_sync()
+        )
+        .expect("error writing to serial");
+    })
+    .expect("failed initializing the kernel");
 
     // SAFETY: A valid page table was set up in setup_page_tables, and cr3 was loaded with its
     // address in setup_control_regsiters.
@@ -110,20 +91,12 @@ pub extern "cdecl" fn start(
         asm!(
           "mov cr4, {cr4:e}",
           "mov cr3, {cr3:e}",
-          cr4 = in(reg) u32::from(cr4),
-          cr3 = in(reg) u64::from(cr3) as u32,
+          cr4 = in(reg) u32::from(initialization_parameters.cr4),
+          cr3 = in(reg) u64::from(initialization_parameters.cr3) as u32,
         );
     }
 
-    // SAFETY: This is safe because the EFER register index is being used, and it is being set to
-    // efer, which was set up correctly in setup_control_registers to enable IA32e (i.e. long mode)
-    unsafe {
-        wrmsr(
-            control_registers::EXTENDED_FEATURE_ENABLE_REGISTER_MSR_INDEX,
-            (u64::from(efer) >> 32) as u32,
-            u64::from(efer) as u32,
-        );
-    }
+    wrmsr(&Msr::Efer(initialization_parameters.efer));
 
     // SAFETY: Cr0 was set to enable paging and protected mode
     // The GDT was set up by setup_global_descriptor_table
@@ -138,33 +111,90 @@ pub extern "cdecl" fn start(
           "push {code_selector}",
           "push {kernel_entrypoint}",
           "retf",
-          cr0 = in(reg) u32::from(cr0),
+          cr0 = in(reg) u32::from(initialization_parameters.cr0),
           out("ax") _,
-          kernel_entrypoint = in(reg) kernel.header().entrypoint() as u32,
-          stack_pointer = in(reg) stack_pointer,
-          code_selector = const GDTI_64_BIT_CODE_SEGMENT * size_of::<gdt::SegmentDescriptor>(),
+          kernel_entrypoint = in(reg) initialization_parameters.kernel_entrypoint as u32,
+          stack_pointer = in(reg) initialization_parameters.stack_pointer,
+          code_selector = in(reg) initialization_parameters.code_selector,
         )
     }
 
     panic!("We didn't load the kernel?");
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn wrmsr(msr: u32, high: u32, low: u32) {
-    asm!(
-      "wrmsr",
-      in("eax") low,
-      in("edx") high,
-      in("ecx") msr,
-    )
+struct InitializationParameters {
+    kernel_entrypoint: u32,
+    cr0: ControlRegister0,
+    cr3: ControlRegister3,
+    cr4: ControlRegister4,
+    efer: ExtendedFeatureEnableRegister,
+    stack_pointer: u32,
+    code_selector: usize,
 }
 
-fn setup_control_registers() -> error::Result<(
-    ControlRegister0,
-    ControlRegister3,
-    ControlRegister4,
-    ExtendedFeatureEnableRegister,
-)> {
+fn init(
+    drive_parameters_pointer: *const u8,
+    stage2_sectors: u32,
+    kernel_sectors: u32,
+    stack_start: u32,
+) -> Result<InitializationParameters, Error> {
+    let kernel = load_kernel_from_boot_disk(
+        drive_parameters_pointer,
+        stage2_sectors,
+        kernel_sectors,
+        stack_start,
+    )?;
+
+    vga::writeln_no_sync!("Read kernel from disk!");
+
+    let Ok(kernel_entrypoint) = u32::try_from(kernel.header().entrypoint()) else {
+        return Err(Error::new(
+            Fault::KernelEntrypointAbove4G,
+            Context::PreparingForJumpToKernel,
+            Facility::Bootloader,
+        ));
+    };
+
+    // FIXME: what if the size of all statics in the kernel gets larger that 1MB? One should
+    // probably find the highest address mapped for the kernel, and add 1MB to that
+    // 1MB of stack + heap should be enough for the first stage of the kernel, right?
+    let Some(stack_pointer) = kernel_entrypoint.checked_next_multiple_of(0x100000) else {
+        return Err(Error::new(
+            Fault::KernelEntrypointTooHigh,
+            Context::PreparingForJumpToKernel,
+            Facility::Bootloader,
+        ));
+    };
+
+    load_segments_into_memory(&kernel)?;
+    vga::writeln_no_sync!("Loaded kernel segments into memory!");
+
+    setup_page_tables()?;
+
+    setup_global_descriptor_table()?;
+
+    let (cr0, cr3, cr4, efer) = setup_control_registers()?;
+
+    Ok(InitializationParameters {
+        kernel_entrypoint,
+        cr0,
+        cr3,
+        cr4,
+        efer,
+        stack_pointer,
+        code_selector: GDTI_64_BIT_CODE_SEGMENT * size_of::<gdt::SegmentDescriptor>(),
+    })
+}
+
+fn setup_control_registers() -> Result<
+    (
+        ControlRegister0,
+        ControlRegister3,
+        ControlRegister4,
+        ExtendedFeatureEnableRegister,
+    ),
+    Error,
+> {
     use control_registers::ControlRegister0Bit::*;
     use control_registers::ControlRegister4Bit::*;
     use control_registers::ExtendedFeatureEnableRegisterBit::*;
@@ -176,11 +206,11 @@ fn setup_control_registers() -> error::Result<(
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     #[allow(static_mut_refs)]
     cr3.set_pml4(unsafe { &PML4 }).map_err(|reason| {
-        common::error::Error::from(InternalError::new(
-            Bootloader,
-            Kind::CantSetupControlRegisters(reason),
-            Context::SettingUpProcessor,
-        ))
+        Error::new(
+            reason,
+            Context::SettingUpControlRegister("cr3"),
+            Facility::Bootloader,
+        )
     })?;
 
     Ok((cr0, cr3, cr4, efer))
@@ -199,7 +229,7 @@ const GDTI_TSS: usize = 5;
 /// # Panics
 /// Panics if the values for the data segment and the size of the gdt::SegmentDescriptor struct
 /// exceed u16 (likely programming errors)
-fn setup_global_descriptor_table() {
+fn setup_global_descriptor_table() -> Result<(), Error> {
     use gdt::SegmentKind::*;
     macro_rules! update_gdt {
         ($gdt:ident[$gdt_index:expr] => $segment_decriptor:expr) => {
@@ -271,6 +301,7 @@ fn setup_global_descriptor_table() {
              in("ax") u8::from(tss_selector) as u16,
         )
     }
+    Ok(())
 }
 
 static mut INTERRUPT_DESCRIPTOR_TABLE: idt::IDT<{ idt::STANDARD_VECTOR_TABLE_SIZE }> =
@@ -360,18 +391,16 @@ static mut PML4: paging::PML4 = paging::PML4::new();
 static mut PAGE_DIRECTORY_POINTER_TABLE: paging::PageDirectoryPointerTable =
     paging::PageDirectoryPointerTable::new();
 
-fn setup_page_tables() -> error::Result<()> {
+fn setup_page_tables() -> Result<(), Error> {
     let pdpt_ptr = &raw mut PAGE_DIRECTORY_POINTER_TABLE;
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     let pdpt = unsafe { &mut *pdpt_ptr };
 
-    pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().map_err(|reason| {
-        common::error::Error::from(InternalError::new(
-            Bootloader,
-            Kind::CantSetupPageTable(reason),
-            Context::SettingUpProcessor,
-        ))
-    })?);
+    pdpt.entries[0].set_physical_address(
+        core::ptr::null::<u8>().try_into().map_err(|reason| {
+            Error::new(reason, Context::SettingUpPageTable, Facility::Bootloader)
+        })?,
+    );
     pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
     let pml4_ptr = &raw mut PML4;
@@ -385,10 +414,8 @@ fn setup_page_tables() -> error::Result<()> {
     Ok(())
 }
 
-/// # Panics
-/// Panics if the kernel ELF file is corrupted and loadable segments can't be read from the file
 #[cfg(target_os = "none")]
-fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
+fn load_segments_into_memory(kernel: &elf::File<'static>) -> Result<(), Error> {
     for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
         program_header.ok().and_then(|program_header| {
             if matches!(program_header.r#type(), ProgramHeaderEntryType::Load) {
@@ -402,15 +429,14 @@ fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
         let size = loadable_program_header.segment_size_on_file();
         if loading_address <= start as *const () as u64 || loading_address + size >= u32::MAX as u64
         {
-            return Err(InternalError::new(
-                Bootloader,
-                Kind::CantLoadSegment(Reason::InvalidSegmentParameters {
+            return Err(Error::new(
+                Fault::InvalidSegmentParameters {
                     virtual_address: loading_address,
                     size,
-                }),
-                Context::LoadingKernel,
-            )
-            .into());
+                },
+                Context::LoadingSegment,
+                Facility::Bootloader,
+            ));
         }
 
         // SAFETY: Virtual address and size have been verified above to be at a address range
@@ -421,38 +447,47 @@ fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
                 loadable_program_header.segment_size_on_file() as usize,
             )
         };
-        loading_area.copy_from_slice(
-            kernel
-                .get_segment(&loadable_program_header)
-                .expect("failed to get segment from kernel ELF file"),
-        );
+        loading_area.copy_from_slice(kernel.get_segment(&loadable_program_header).ok_or(
+            Error::new(
+                Fault::InvalidSegmentParameters {
+                    virtual_address: loading_address,
+                    size,
+                },
+                Context::LoadingSegment,
+                Facility::Bootloader,
+            ),
+        )?);
     }
     Ok(())
 }
 
-/// # Panics
-///
-/// Panics if the drive_parameters_pointer doesn't point to valid drive parameters data (e.g. null,
-/// invalid data that can't be parsed, etc.)
 fn load_kernel_from_boot_disk(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,
     kernel_sectors: u32,
     stack_start: u32,
-) -> Result<elf::File<'static>, error::Error> {
+) -> Result<elf::File<'static>, Error> {
+    fn error(fault: Fault) -> Error {
+        Error::new(fault, Context::ReadingKernelFromDisk, Facility::Bootloader)
+    }
+
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
     // buffer of 30 bytes containing the result
     let drive_parameters_bytes = unsafe {
         core::ptr::slice_from_raw_parts(drive_parameters_pointer, DRIVE_PARAMETERS_BUFFER_SIZE)
             .as_ref()
-            .expect("failed to convert raw pointer into a ref")
+            .ok_or(error(Fault::InvalidDriveParametersPointer(
+                drive_parameters_pointer,
+            )))?
     };
 
     // SAFETY: For the reasons above, it's just as safe to unwrap here
-    let drive_parameters = edd::DriveParameters::try_from(drive_parameters_bytes)
-        .inspect_err(|err| vga::writeln_no_sync!("{err:#}"))
-        .expect("failed to get drive parameters for the boot disk");
+    let drive_parameters =
+        edd::DriveParameters::try_from(drive_parameters_bytes).map_err(|err| {
+            error::push_to_global_error_chain_no_sync(err);
+            error(Fault::FailedBootDeviceIdentification)
+        })?;
 
     match ata::Device::try_from(drive_parameters) {
         Ok(ata_device) => {
@@ -467,49 +502,71 @@ fn load_kernel_from_boot_disk(
                     kernel_size_bytes,
                 )
                 .as_mut()
-                .expect("failed to convert raw pointer into a mut ref")
+                .ok_or(error(Fault::InvalidStackStart(stack_start)))?
             };
 
             // FIXME: if the kernel gets large enough, we might want to read it in multiple
             // operations, or use lba48
             if kernel_sectors > 256 {
-                return Err(InternalError::new(
-                    Bootloader,
-                    Kind::CantReadKernelFromDisk(Reason::TooManySectors(kernel_sectors)),
-                    Context::LoadingKernel,
-                )
-                .into());
+                return Err(error(Fault::TooManySectors(kernel_sectors)));
             }
-            let Ok(()) = ata_device
+            ata_device
                 .read_sectors_lba28_pio(kernel_sectors as u8, stage2_sectors + 1, kernel_bytes)
-                .map_err(|err| vga::writeln_no_sync!("{err:#}"))
-            else {
-                return Err(InternalError::new(
-                    Bootloader,
-                    Kind::CantReadKernelFromDisk(Reason::IOError),
-                    Context::LoadingKernel,
-                )
-                .into());
-            };
+                .map_err(|err| {
+                    error::push_to_global_error_chain_no_sync(err);
+                    error(Fault::IOError)
+                })?;
 
             elf::File::try_from(&kernel_bytes[..kernel_size_bytes]).map_err(|err| {
-                vga::writeln_no_sync!("{err:#}");
-                InternalError::new(
-                    Bootloader,
-                    Kind::CantReadKernelFromDisk(Reason::InvalidElf),
-                    Context::LoadingKernel,
-                )
-                .into()
+                error::push_to_global_error_chain_no_sync(err);
+                error(Fault::InvalidElf)
             })
         }
         Err(_drive_parametrs) => {
+            error::clear_global_error_chain_no_sync();
             // TODO: try USB
-            Err(InternalError::new(
-                Bootloader,
-                Kind::CantReadKernelFromDisk(Reason::UnsupportedBootMedium),
-                Context::LoadingKernel,
-            )
-            .into())
+            look_for_usb_root_hubs();
+
+            Err(error(Fault::UnsupportedBootMedium))
+        }
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::missing_panics_doc)]
+fn look_for_usb_root_hubs() {
+    let mut config_addr = pci::ConfigAddressRegister::default();
+    // Brute-force enumeration
+    let mut timer = common::timer::LowPrecisionTimer::new(10_000_000_000);
+    for bus_number in 0..=pci::MAX_BUS_NUMBER as u8 {
+        config_addr.set_bus_number(bus_number);
+        config_addr.set_flag(pci::ConfigAddressRegisterFlag::Enable);
+        for device_number in 0..=pci::MAX_DEVICE_NUMBER as u8 {
+            config_addr.set_device_number(device_number);
+            if let Some(config_header) = config_addr.dump_configuration_space_header() {
+                if config_header.as_ref().unwrap().is_usb() {
+                    vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
+                    timer.reset();
+                    while !timer.timeout() {
+                        timer.update();
+                    }
+                }
+                if config_header.unwrap().is_multi_function_device() {
+                    for function in 1..=pci::MAX_FUNCTION_NUMBER as u8 {
+                        config_addr.set_function_number(function);
+                        if let Some(config_header) = config_addr.dump_configuration_space_header()
+                            && config_header.as_ref().unwrap().is_usb()
+                        {
+                            vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
+                            timer.reset();
+                            while !timer.timeout() {
+                                timer.update();
+                            }
+                        }
+                    }
+                    config_addr.set_function_number(0);
+                }
+            }
         }
     }
 }

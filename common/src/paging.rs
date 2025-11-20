@@ -4,7 +4,10 @@ use core::arch::x86::__cpuid;
 use core::arch::x86_64::__cpuid;
 use core::cmp::min;
 
-use crate::make_bitmap;
+use crate::{
+    error::{Error, Fault, Feature},
+    make_bitmap,
+};
 
 #[allow(unused)]
 #[repr(u64)]
@@ -140,13 +143,11 @@ impl_deref_to_page_table_entry!(PageDirectoryPointerTableEntry);
 pub struct _1GPage(*const u8);
 
 impl TryFrom<*const u8> for _1GPage {
-    type Error = crate::error::Reason;
+    type Error = Fault;
 
-    fn try_from(bytes: *const u8) -> Result<Self, crate::error::Reason> {
+    fn try_from(bytes: *const u8) -> Result<Self, Fault> {
         if !supports_1gb_pages() {
-            return Err(crate::error::Reason::UnsupportedFeature(
-                crate::error::Feature::_1GBPages,
-            ));
+            return Err(Fault::UnsupportedFeature(Feature::_1GBPages));
         }
         Ok(Self(bytes))
     }

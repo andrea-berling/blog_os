@@ -1,19 +1,11 @@
 use crate::{
-    elf::{
-        Halfword,
-        error::{self, Facility},
-        header,
-    },
+    elf::{Halfword, header},
+    error::{Facility, Fault},
     make_bitmap,
 };
 
 use crate::elf::Error;
 use crate::error::Context;
-use crate::error::InternalError;
-use crate::error::Kind;
-use crate::error::Kind::*;
-use crate::error::Reason;
-use crate::error::Result;
 use crate::error::try_read_error;
 
 mod inner {
@@ -80,30 +72,29 @@ pub const ELF64_ENTRY_SIZE: usize = size_of::<inner::Elf64HeaderEntry>();
 pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
-    fn error(kind: Kind, facility: Facility) -> Error {
-        Error::InternalError(InternalError::new(facility, kind, Context::Parsing))
-    }
-
     pub(crate) fn try_from_bytes(
         bytes: &[u8],
         class: header::Class,
         facility: Facility,
-    ) -> Result<Self, Facility> {
+    ) -> Result<Self, Error> {
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
                 .map_err(|err| try_read_error(facility, err))
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
-                    if let Err(err) = ProgramHeaderEntryType::try_from(type_halfword) {
-                        return Err(Self::error(CantReadField("type", err), facility));
+                    if ProgramHeaderEntryType::try_from(type_halfword).is_err() {
+                        return Err(Error::parsing_error(
+                            Fault::InvalidValueForField("type"),
+                            facility,
+                        ));
                     }
 
                     let flags_word = header_entry.flags.get();
 
                     if flags_word > 7 {
-                        return Err(Self::error(
-                            CantReadField("type", Reason::InvalidValue(flags_word.into())),
+                        return Err(Error::parsing_error(
+                            Fault::InvalidValueForField("flags"),
                             facility,
                         ));
                     }
@@ -118,9 +109,13 @@ impl HeaderEntry {
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
-                    match ProgramHeaderEntryType::try_from(type_halfword) {
-                        Ok(_) => Ok(header_entry),
-                        Err(err) => Err(Self::error(CantReadField("type", err), facility)),
+                    if ProgramHeaderEntryType::try_from(type_halfword).is_ok() {
+                        Ok(header_entry)
+                    } else {
+                        Err(Error::parsing_error(
+                            Fault::InvalidValueForField("type"),
+                            facility,
+                        ))
                     }
                 })
                 .map(inner::HeaderEntry::Elf64)
@@ -256,7 +251,7 @@ pub enum ProgramHeaderEntryType {
 }
 
 impl TryFrom<u32> for ProgramHeaderEntryType {
-    type Error = Reason;
+    type Error = u32;
 
     fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         match value {
@@ -272,7 +267,7 @@ impl TryFrom<u32> for ProgramHeaderEntryType {
             t if (0x60000000..=0xFFFFFFFF).contains(&t) => {
                 Ok(ProgramHeaderEntryType::ProcessorSpecific(t))
             }
-            _ => Err(Reason::InvalidValue(value.into())),
+            _ => Err(value),
         }
     }
 }
@@ -303,25 +298,20 @@ use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
 
 impl<'a> ProgramHeaderEntries<'a> {
-    fn error(kind: Kind) -> Error {
-        Error::InternalError(InternalError::new(
-            error::Facility::ProgramHeader,
-            kind,
-            Context::Parsing,
-        ))
-    }
-
     pub(crate) fn new(
         bytes: &'a [u8],
         class: header::Class,
         n_entries: Halfword,
-    ) -> Result<Self, Facility> {
+    ) -> Result<Self, Error> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
         };
         if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
-            return Err(Self::error(CantFit("program headers")));
+            return Err(Error::parsing_error(
+                Fault::NotEnoughBytesFor("program headers"),
+                Facility::ElfProgramHeader,
+            ));
         }
 
         Ok(Self {
@@ -333,7 +323,7 @@ impl<'a> ProgramHeaderEntries<'a> {
 }
 
 impl<'a> Iterator for ProgramHeaderEntries<'a> {
-    type Item = Result<HeaderEntry, Facility>;
+    type Item = Result<HeaderEntry, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -349,7 +339,7 @@ impl<'a> Iterator for ProgramHeaderEntries<'a> {
             HeaderEntry::try_from_bytes(
                 self.bytes.get(self.bytes_read_so_far..)?,
                 self.class,
-                error::Facility::ProgramHeaderEntry(entry_size as Halfword),
+                Facility::ElfProgramHeaderEntry(entry_size as Halfword),
             )
             .inspect(|_| {
                 self.bytes_read_so_far += entry_size;
