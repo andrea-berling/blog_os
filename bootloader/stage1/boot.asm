@@ -54,15 +54,15 @@ call interrupt_with_retry
 
 ; ---- read stage2 via EDD (AH=42h) ----
 mov cx, STAGE2_SECTORS      ; CX keeps track of sectors left to read
-.read_sectors_loop:
-; 1. Determine chunk size (cap at 127 to satisfy BIOS/DMA limits)
+read_sectors:
+.loop:
+  ; 1. Determine chunk size (cap at 127 to satisfy EDD limit)
   mov ax, cx              ; Start with the assumption we'll read all remaining sectors
   cmp ax, 127
   jbe .set_dap_count      ; If AX <= 127, it's a valid size
   mov ax, 127             ; Otherwise, cap it at 127
 .set_dap_count:
   mov [dap + 2], ax       ; Write the final, correct value to memory once
-.read_sectors:
   ; 2. Perform the read
   mov ah, 0x42
   mov si, dap
@@ -74,27 +74,26 @@ mov cx, STAGE2_SECTORS      ; CX keeps track of sectors left to read
   ; 3. Update remaining count
   mov ax, [dap + 2]           ; Get the number of sectors we actually read
   sub cx, ax                  ; Subtract from total remaining
-  jz .read_sectors_done       ; If 0 sectors left, we are finished
+  jz .done       ; If 0 sectors left, we are finished
 
   ; 4. Advance LBA (Disk Offset)
   ; Since we are looping, we know we read exactly 127 sectors.
-  add word [dap + 8],127      ; Add to lower 16 bits of LBA
-  adc word [dap + 10],0        ; Propagate carry to next 16 bits (handles > 32MB locations)
+  add word [dap + 8],  127      ; Add to lower 16 bits of LBA
+  adc word [dap + 10], 0        ; Propagate carry to next 16 bits (handles > 32MB locations)
 
   ; 5. Advance Buffer Address (Memory Offset)
   ; 127 sectors * 512 bytes = 65024 bytes = 0xFE00
   ; TODO: what if the sector size != 512?
   add word [dap + 4], 0xFE00  ; Advance Offset
-  jnc .read_sectors_loop      ; If no overflow, continue
+  jnc .loop      ; If no overflow, continue
   add word [dap + 6], 0x1000  ; If overflow, add 4KB (0x1000 paragraphs) to Segment
                               ; 0x1000 * 16 = 65536 (64KB), effectively handling the carry
-  jmp .read_sectors_loop
-
-.read_sectors_done:
+  jmp .loop
+.done:
 
 ; enter protected mode
 cli
-lgdt [gdt_desc]
+lgdt [gdt.desc]
 mov eax, cr0
 or  eax, 1
 mov cr0, eax
@@ -126,10 +125,10 @@ gdt:
   dq 0                        ; null
   dq 0x00CF9A000000FFFF       ; code: base=0, limit=4GB, P=1, DPL=0, Code, R, 32-bit
   dq 0x00CF92000000FFFF       ; data: base=0, limit=4GB, P=1, DPL=0, Data, W, 32-bit
-gdt_end:
+.end:
 ; 6 bytes: len(gdt) - 1 (2 bytes), linear_addr(gdt) (4 bytes)
-gdt_desc:
-  dw gdt_end - gdt - 1
+.desc:
+  dw gdt.end - gdt - 1
   dd gdt
 
 ; Disk Address Packet (EDD)
