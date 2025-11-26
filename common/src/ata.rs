@@ -2,6 +2,7 @@ use core::arch::asm;
 
 use crate::{
     error::{Context, Error, Facility, Fault},
+    ioport::Port,
     make_bitmap, timer,
 };
 
@@ -98,68 +99,68 @@ impl Device {
         }
     }
 
-    fn data_register(&self) -> u16 {
-        self.io_port_base_address
+    fn data_register(&self) -> Port {
+        Port::new(self.io_port_base_address)
     }
 
-    fn error_register(&self) -> u16 {
-        self.io_port_base_address + 1
+    fn error_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 1)
     }
 
-    fn features_register(&self) -> u16 {
-        self.io_port_base_address + 1
+    fn features_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 1)
     }
 
-    fn sector_count_register(&self) -> u16 {
-        self.io_port_base_address + 2
+    fn sector_count_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 2)
     }
 
-    fn sector_number_register(&self) -> u16 {
-        self.io_port_base_address + 3
+    fn sector_number_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 3)
     }
 
-    fn lba_low_register(&self) -> u16 {
-        self.io_port_base_address + 3
+    fn lba_low_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 3)
     }
 
-    fn cylinder_low_register(&self) -> u16 {
-        self.io_port_base_address + 4
+    fn cylinder_low_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 4)
     }
 
-    fn lba_mid_register(&self) -> u16 {
-        self.io_port_base_address + 4
+    fn lba_mid_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 4)
     }
 
-    fn cylinder_high_register(&self) -> u16 {
-        self.io_port_base_address + 5
+    fn cylinder_high_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 5)
     }
 
-    fn lba_high_register(&self) -> u16 {
-        self.io_port_base_address + 5
+    fn lba_high_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 5)
     }
 
-    fn drive_head_register(&self) -> u16 {
-        self.io_port_base_address + 6
+    fn drive_head_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 6)
     }
 
-    fn status_register(&self) -> u16 {
-        self.io_port_base_address + 7
+    fn status_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 7)
     }
 
-    fn command_register(&self) -> u16 {
-        self.io_port_base_address + 7
+    fn command_register(&self) -> Port {
+        Port::new(self.io_port_base_address + 7)
     }
 
-    fn alternate_status_register(&self) -> u16 {
-        self.control_port_base_address
+    fn alternate_status_register(&self) -> Port {
+        Port::new(self.control_port_base_address)
     }
 
-    fn device_control_register(&self) -> u16 {
-        self.control_port_base_address
+    fn device_control_register(&self) -> Port {
+        Port::new(self.control_port_base_address)
     }
 
-    fn drive_address_register(&self) -> u16 {
-        self.control_port_base_address + 1
+    fn drive_address_register(&self) -> Port {
+        Port::new(self.control_port_base_address + 1)
     }
 
     fn io_error(&self, fault: Fault) -> Error {
@@ -178,19 +179,7 @@ impl Device {
     }
 
     fn get_status(&self) -> StatusRegisterFlags {
-        let status: u8;
-        // SAFETY: This is safe because we are reading from a valid I/O port.
-        // The `status_register` method returns the correct port address for the ATA
-        // status register, which is a read-only operation. The caller of `Device::new`
-        // is responsible for providing the correct base addresses for the ATA controller.
-        unsafe {
-            asm!("in al, dx",
-                in("dx") self.status_register(),
-                out("al") status,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        StatusRegisterFlags::from(status)
+        StatusRegisterFlags::from(self.status_register().readb())
     }
 
     fn ready_for_command(&self) -> bool {
@@ -247,97 +236,36 @@ impl Device {
         }
 
         use DriveHeadRegisterFlag::*;
-        let mut drive_head_register = DriveHeadRegisterFlags::new().lba(lba_address);
+        let mut drive_head_register_flags = DriveHeadRegisterFlags::new().lba(lba_address);
         if self.is_slave {
-            drive_head_register.set_flag(IsSlave);
+            drive_head_register_flags.set_flag(IsSlave);
         }
 
-        // SAFETY: The following sequence of `out` instructions is safe because it
-        // correctly follows the ATA PIO LBA28 protocol for setting up a read command.
-        // Each `out` instruction writes a byte to a specific, valid I/O port address
-        // managed by the `Device` struct. The caller of `Device::new` is responsible
-        // for providing the correct base address. The values written are derived from
-        // the function arguments and are formatted according to the ATA specification.
-        // This entire sequence is a single logical operation to prepare the controller
-        // for the subsequent command.
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.drive_head_register(),
-                in("al") u8::from(drive_head_register),
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        // SAFETY: Same as above
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.sector_count_register(),
-                in("al") sector_count,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        // SAFETY: Same as above
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.lba_low_register(),
-                in("al") (lba_address & 0xff) as u8,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        // SAFETY: Same as above
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.lba_mid_register(),
-                in("al") ((lba_address >> 8) & 0xff) as u8,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        // SAFETY: Same as above
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.lba_high_register(),
-                in("al") ((lba_address >> 16) & 0xff) as u8,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
+        self.drive_head_register()
+            .writeb(drive_head_register_flags.into());
+        self.sector_count_register().writeb(sector_count);
+        self.lba_low_register().writeb(lba_address as u8);
+        self.lba_mid_register().writeb((lba_address >> 8) as u8);
+        self.lba_high_register().writeb((lba_address >> 16) as u8);
 
         self.wait_for_readiness(1_000_000);
-        // SAFETY: This is safe because we are issuing a command to the command register
-        // port. The preceding call to `wait_for_readiness` ensures the device is
-        // not busy (BSY=0) and is ready to accept a command (RDY=1), preventing a command
-        // from being sent to a device that is not prepared to handle it.
-        unsafe {
-            asm!("out dx, al",
-                in("dx") self.command_register(),
-                in("al") Command::ReadSectors as u8,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
+        self.command_register().writeb(Command::ReadSectors as u8);
 
         for i in 0..sector_count {
             self.poll_for_reads(1_000_000)?;
 
-            // SAFETY: The `rep insw` instruction is safe to use here due to the following invariants:
-            // 1. A prior call to `poll_for_reads` ensures the device is ready to transfer data
-            //    (BSY=0, DRQ=1), so reading from the data port will not hang.
-            // 2. The I/O port in `dx` is the correct data register for the ATA device.
-            // 3. The destination buffer pointer in `edi` is valid, writable, and correctly aligned.
-            //    It is derived from `output_buffer`, a mutable slice provided by the caller,
-            //    which Rust guarantees is valid for writes.
-            // 4. The `output_buffer` is asserted at the start of the function to be large
-            //    enough to hold `sector_count` sectors, preventing a buffer overflow.
-            // 5. The count in `cx` is `sector_size_bytes / 2`, which is the correct number of
-            //    16-bit words to read for a single sector.
-            // 6. The Direction Flag (DF) is clear by default in Rust's ABI, ensuring `edi` increments
-            //    and the buffer is filled in the correct forward direction.
-            unsafe {
-                asm!("rep insw",
-                    in("dx") self.data_register() ,
-                    in("edi") output_buffer[i as usize*self.sector_size_bytes as usize..].as_mut_ptr(),
-                    // u16 is the size of word
-                    in("cx") self.sector_size_bytes/size_of::<u16>() as u16 ,
-                    options(nostack, preserves_flags)
-                );
-            }
+            let start = i as usize * self.sector_size_bytes as usize;
+            let end = start + (self.sector_size_bytes as usize);
+            let n_words = self.sector_size_bytes as usize / size_of::<u16>();
+
+            self.data_register()
+                .rep_insw(&mut output_buffer[start..end], n_words as u16)
+                .map_err(|n_words| {
+                    self.io_error(Fault::CantReadIntoBuffer(
+                        (n_words as usize * size_of::<u16>()) as u64,
+                        self.sector_size_bytes as u64,
+                    ))
+                })?;
         }
 
         Ok(())

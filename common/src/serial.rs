@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::make_bitmap;
+use crate::{ioport::Port, make_bitmap};
 
 const COM1: u16 = 0x3F8;
 
@@ -91,34 +91,34 @@ impl Com1 {
         unsafe { COM1_INITIALIZED }
     }
 
-    const fn interrupt_enable_register() -> u16 {
-        COM1 + 1
+    fn interrupt_enable_register() -> Port {
+        Port::new(COM1 + 1)
     }
 
-    const fn line_control_register() -> u16 {
-        COM1 + 3
+    fn line_control_register() -> Port {
+        Port::new(COM1 + 3)
     }
 
-    const fn divisor_register_low() -> u16 {
-        COM1
+    fn divisor_register_low() -> Port {
+        Port::new(COM1)
     }
-    const fn divisor_register_high() -> u16 {
-        COM1 + 1
-    }
-
-    const fn modem_control_register() -> u16 {
-        COM1 + 4
+    fn divisor_register_high() -> Port {
+        Port::new(COM1 + 1)
     }
 
-    const fn line_status_register() -> u16 {
-        COM1 + 5
-    }
-    const fn receive_register() -> u16 {
-        COM1
+    fn modem_control_register() -> Port {
+        Port::new(COM1 + 4)
     }
 
-    const fn transmit_register() -> u16 {
-        COM1
+    fn line_status_register() -> Port {
+        Port::new(COM1 + 5)
+    }
+    fn receive_register() -> Port {
+        Port::new(COM1)
+    }
+
+    fn transmit_register() -> Port {
+        Port::new(COM1)
     }
 
     /// # Panics
@@ -126,75 +126,34 @@ impl Com1 {
     /// TODO: Should we make it fallibe with Result instead?
     pub fn initialize() {
         // https://wiki.osdev.org/Serial_Ports#Initialization
+
         use LineControlRegisterFlag::*;
-        let enable_dlab: LineControlRegisterFlags = DivisorLatchAcccessBit.into();
-        // 8 bits, one stop bit, no parity
-        let line_control = DataBits1 | DataBits2;
-
         use ModemControlRegisterFlag::*;
-        let loopback = Loopback | Out1 | Out2 | RequestToSend;
-        // SAFETY: need some assembly to do serial I/O
-        unsafe {
-            asm!(
-                "out dx, al",
-                "mov al, bl",
-                "mov dx,{line_control_register}",
-                "out dx, al",
-                "mov al,3",
-                "mov dx,{divisor_register_low}",
-                "out dx, al",
-                "mov al,0",
-                "mov dx,{divisor_register_high}",
-                "out dx, al",
-                "mov al,cl",
-                "mov dx,{line_control_register}",
-                "out dx, al",
-                inout("al") u8::from(InterruptEnableFlags::empty()) => _,
-                inout("dx") Self::interrupt_enable_register() => _,
-                in("bl") u8::from(enable_dlab),
-                line_control_register = const Self::line_control_register(),
-                divisor_register_low = const Self::divisor_register_low(),
-                divisor_register_high = const Self::divisor_register_high(),
-                in("cl") u8::from(line_control),
-            )
-        }
 
-        // SAFETY: need some assembly to do serial I/O
-        unsafe {
-            asm!(
-                "out dx, al",
-                "mov dx,{transmit_register}",
-                "mov al, 0xae",
-                "out dx, al",
-                inout("al") u8::from(loopback) => _,
-                inout("dx") Self::modem_control_register() => _,
-                transmit_register = const Self::transmit_register()
-            )
-        }
-
-        let test_byte: u8;
-        // SAFETY: need some assembly to do serial I/O
-        unsafe { asm!("in al, dx", out("al") test_byte, in("dx") Self::receive_register()) };
-
-        if test_byte != 0xae {
+        Self::interrupt_enable_register().writeb(InterruptEnableFlags::empty().into());
+        Self::line_control_register().writeb(DivisorLatchAcccessBit as u8);
+        Self::divisor_register_low().writeb(3);
+        Self::divisor_register_high().writeb(0);
+        // 8 bits, one stop bit, no parity
+        Self::line_control_register().writeb((DataBits1 | DataBits2).into());
+        Self::modem_control_register().writeb((Loopback | Out1 | Out2 | RequestToSend).into());
+        let test_byte = 0xae;
+        Self::transmit_register().writeb(test_byte);
+        if Self::receive_register().readb() != test_byte {
             panic!("COM1 initialization");
         }
-
-        // SAFETY: need some assembly to do serial I/O
-        unsafe { asm!("out dx,al", in("dx") Self::modem_control_register(), in("al") 0u8) };
+        Self::modem_control_register().writeb(ModemControlRegisterFlags::empty().into());
 
         // SAFETY: no multitasking, no problem
         unsafe { COM1_INITIALIZED = true }
     }
 
     fn is_transmit_empty() -> bool {
-        let line_status: u8;
-
-        // SAFETY: need some assembly to do serial I/O
-        unsafe { asm!("in al, dx", out("al") line_status, in("dx") Self::line_status_register()) };
-
-        let line_status = LineStatusRegisterFlags { bits: line_status };
-        line_status.is_set(LineStatusRegisterFlag::TransmitterHoldingRegisterEmpty)
+        use LineStatusRegisterFlag::*;
+        (LineStatusRegisterFlags {
+            bits: Self::line_status_register().readb(),
+        })
+        .is_set(TransmitterHoldingRegisterEmpty)
     }
 
     fn send_byte(byte: u8) {
@@ -203,8 +162,7 @@ impl Com1 {
                 break;
             }
         }
-        // SAFETY: need some assembly to do serial I/O
-        unsafe { asm!("out dx, al", in("dx") Self::transmit_register(), in("al") byte) }
+        Self::transmit_register().writeb(byte);
     }
 }
 
@@ -216,3 +174,19 @@ impl core::fmt::Write for Com1 {
         Ok(())
     }
 }
+
+pub fn __writeln_no_sync(args: core::fmt::Arguments) -> core::fmt::Result {
+    use core::fmt::Write;
+    let mut serial_writer = Com1::get();
+    serial_writer.write_fmt(args)?;
+    writeln!(serial_writer)
+}
+
+#[macro_export]
+macro_rules! serial_writeln_no_sync {
+    ($format_string:literal$(, $args:expr)*) => {
+        $crate::serial::__writeln_no_sync(::core::format_args!($format_string $(,$args)*,)).expect("couldn't write to COM1")
+    };
+}
+
+pub use serial_writeln_no_sync as writeln_no_sync;

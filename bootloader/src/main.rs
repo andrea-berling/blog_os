@@ -24,7 +24,7 @@ use common::{
     gdt::{self, SegmentDescriptor},
     idt,
     paging::{self},
-    pci, tss, vga,
+    pci, serial, tss, vga,
 };
 
 use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
@@ -69,16 +69,7 @@ pub extern "cdecl" fn start(
             Facility::Bootloader,
         ));
         vga::writeln_no_sync!("{:}", error::get_global_error_chain_no_sync());
-        use common::serial;
-        use core::fmt::Write;
-
-        let mut serial_writer = serial::Com1::get();
-        writeln!(
-            serial_writer,
-            "{:#}",
-            error::get_global_error_chain_no_sync()
-        )
-        .expect("error writing to serial");
+        serial::writeln_no_sync!("{:#}", error::get_global_error_chain_no_sync());
     })
     .expect("failed initializing the kernel");
 
@@ -538,7 +529,6 @@ fn load_kernel_from_boot_disk(
 fn look_for_usb_root_hubs() {
     let mut config_addr = pci::ConfigAddressRegister::default();
     // Brute-force enumeration
-    let mut timer = common::timer::LowPrecisionTimer::new(10_000_000_000);
     for bus_number in 0..=pci::MAX_BUS_NUMBER as u8 {
         config_addr.set_bus_number(bus_number);
         config_addr.set_flag(pci::ConfigAddressRegisterFlag::Enable);
@@ -547,10 +537,7 @@ fn look_for_usb_root_hubs() {
             if let Some(config_header) = config_addr.dump_configuration_space_header() {
                 if config_header.as_ref().unwrap().is_usb() {
                     vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                    timer.reset();
-                    while !timer.timeout() {
-                        timer.update();
-                    }
+                    serial::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
                 }
                 if config_header.unwrap().is_multi_function_device() {
                     for function in 1..=pci::MAX_FUNCTION_NUMBER as u8 {
@@ -559,10 +546,7 @@ fn look_for_usb_root_hubs() {
                             && config_header.as_ref().unwrap().is_usb()
                         {
                             vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                            timer.reset();
-                            while !timer.timeout() {
-                                timer.update();
-                            }
+                            serial::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
                         }
                     }
                     config_addr.set_function_number(0);

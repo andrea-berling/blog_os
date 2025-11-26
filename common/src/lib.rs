@@ -9,6 +9,7 @@ pub mod elf;
 pub mod error;
 pub mod gdt;
 pub mod idt;
+pub mod ioport;
 pub mod macros;
 pub mod paging;
 pub mod pci;

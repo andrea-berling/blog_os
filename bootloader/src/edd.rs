@@ -340,7 +340,7 @@ impl DriveParameters {
             return Ok(());
         }
 
-        if self.buffer_size != 30 {
+        if self.buffer_size as usize != size_of::<DriveParametersRaw>() {
             return Err(Error::parsing_error(
                 Fault::NotEnoughBytesFor("fixed disk parameter table"),
                 Facility::EDDFixedDiskParameterTable,
@@ -509,7 +509,9 @@ impl TryFrom<&[u8]> for DriveParameters {
             DriveParametersRaw::try_read_from_prefix(bytes).map_err(Self::try_read_error)?;
 
         let mut result = Self::try_from(&drive_parameters_raw)?;
-        if drive_parameters_raw.configuration_parameters.get() != u32::MAX {
+        if drive_parameters_raw.configuration_parameters.get() != u32::MAX
+            && drive_parameters_raw.buffer_size.get() as usize == size_of::<DriveParametersRaw>()
+        {
             result.resolve_fdbt(drive_parameters_raw.configuration_parameters.get())?;
         }
 

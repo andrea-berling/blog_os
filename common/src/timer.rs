@@ -1,7 +1,7 @@
 // https://www.alldatasheet.com/datasheet-pdf/download/66093/INTEL/PIIX3.html
 use core::arch::asm;
 
-use crate::make_bitmap;
+use crate::{ioport::Port, make_bitmap};
 
 const TIMER_0_FREQUENCY_HZ: u32 = 1_193_182;
 
@@ -69,20 +69,10 @@ fn read_timer_0_counter() -> u16 {
         .select_counter(Counter::_0)
         .counter_latch()
         .binary_countdown();
-    let result: u16;
-    // SAFETY: registers are correct
-    unsafe {
-        asm!(
-            "out {tcw_reg}, al",
-            "in al, {counter0_reg}",
-            "in al, {counter0_reg}",
-            tcw_reg = const TIMER_CONTROL_WORD,
-            in("al") u8::from(timer_control_word),
-            counter0_reg = const TIMER_0,
-            lateout("ax") result
-        );
-    }
-    result
+    let timer_control_word_port = Port::new(TIMER_CONTROL_WORD as u16);
+
+    timer_control_word_port.writeb(u8::from(timer_control_word));
+    (timer_control_word_port.readb() as u16) | ((timer_control_word_port.readb() as u16) << 8)
 }
 
 #[derive(Debug)]
