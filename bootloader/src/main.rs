@@ -6,7 +6,10 @@
 #![deny(clippy::unwrap_used)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
-use common::elf::program_header::ProgramHeaderEntryType;
+use common::{
+    elf::program_header::ProgramHeaderEntryType,
+    usb::{self},
+};
 use core::arch::{asm, naked_asm};
 
 mod edd;
@@ -104,7 +107,7 @@ pub extern "cdecl" fn start(
           "retf",
           cr0 = in(reg) u32::from(initialization_parameters.cr0),
           out("ax") _,
-          kernel_entrypoint = in(reg) initialization_parameters.kernel_entrypoint as u32,
+          kernel_entrypoint = in(reg) initialization_parameters.kernel_entrypoint,
           stack_pointer = in(reg) initialization_parameters.stack_pointer,
           code_selector = in(reg) initialization_parameters.code_selector,
         )
@@ -409,12 +412,8 @@ fn setup_page_tables() -> Result<(), Error> {
 #[cfg(target_os = "none")]
 fn load_segments_into_memory(kernel: &elf::File<'static>) -> Result<(), Error> {
     for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
-        program_header.ok().and_then(|program_header| {
-            if matches!(program_header.r#type(), ProgramHeaderEntryType::Load) {
-                Some(program_header)
-            } else {
-                None
-            }
+        program_header.ok().filter(|program_header| {
+            matches!(program_header.r#type(), ProgramHeaderEntryType::Load)
         })
     }) {
         let loading_address = loadable_program_header.virtual_address();
@@ -526,31 +525,20 @@ fn load_kernel_from_boot_disk(
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::missing_panics_doc)]
+// NOTE: Load-bearing assumption: the bootloader was loaded from a USB stick connected to a hub
+// controlle by an EHCI controller
 fn look_for_usb_root_hubs() {
-    let mut config_addr = pci::ConfigAddressRegister::default();
-    // Brute-force enumeration
-    for bus_number in 0..=pci::MAX_BUS_NUMBER as u8 {
-        config_addr.set_bus_number(bus_number);
-        config_addr.set_flag(pci::ConfigAddressRegisterFlag::Enable);
-        for device_number in 0..=pci::MAX_DEVICE_NUMBER as u8 {
-            config_addr.set_device_number(device_number);
-            if let Some(config_header) = config_addr.dump_configuration_space_header() {
-                if config_header.as_ref().unwrap().is_usb() {
-                    vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                    serial::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                }
-                if config_header.unwrap().is_multi_function_device() {
-                    for function in 1..=pci::MAX_FUNCTION_NUMBER as u8 {
-                        config_addr.set_function_number(function);
-                        if let Some(config_header) = config_addr.dump_configuration_space_header()
-                            && config_header.as_ref().unwrap().is_usb()
-                        {
-                            vga::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                            serial::writeln_no_sync!("{}", &config_header.as_ref().unwrap());
-                        }
-                    }
-                    config_addr.set_function_number(0);
-                }
+    for usb_host_controller in pci::EHCIControllers::new() {
+        serial::writeln_no_sync!("{}", &usb_host_controller);
+        for (i, port) in usb_host_controller.ports().into_iter().enumerate() {
+            if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
+                && port.needs_reset()
+            {
+                serial::writeln_no_sync!("Port {i} needs reset");
+                usb_host_controller.reset_port(i);
+            }
+            if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent) {
+                serial::writeln_no_sync!("Port {i} has device present");
             }
         }
     }
