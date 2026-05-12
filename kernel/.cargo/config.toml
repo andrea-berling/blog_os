@@ -6,6 +6,7 @@ kernel = [
   "build",
   "-Zbuild-std=core,compiler_builtins",
   "-Zbuild-std-features=mem",
+  "-Zjson-target-spec",
   "--target", "x86_64-blog_os.json"
 ]
 

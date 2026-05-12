@@ -4,10 +4,31 @@ bios = [
   "build",
   "-Zbuild-std=core,compiler_builtins",
   "-Zbuild-std-features=mem",
+  "-Zjson-target-spec",
+  "--target", "i686-bootloader.json"
+]
+check_bios = [
+  "check",
+  "-Zbuild-std=core,compiler_builtins",
+  "-Zbuild-std-features=mem",
+  "-Zjson-target-spec",
+  "--message-format", "json",
+  "--target", "i686-bootloader.json"
+]
+clippy_bios = [
+  "clippy",
+  "-Zbuild-std=core,compiler_builtins",
+  "-Zbuild-std-features=mem",
+  "-Zjson-target-spec",
   "--target", "i686-bootloader.json"
 ]
 test_host = ["test", "--target", "x86_64-unknown-linux-gnu"]
 [build]
 target = "i686-bootloader.json"
 [target.'cfg(all(target_arch = "x86", target_os = "none"))']
-rustflags = ["-C", "link-args=-Tbootloader/link.x -Map=layout.map -no-pie", "-C", "lto=no", "-C", "relocation-model=static", "-C", "force-unwind-tables=no"]
+rustflags = [
+  "-C", "link-args=-Tbootloader/link.x -Map=layout.map -no-pie",
+  "-C", "lto=no",
+  "-C", "relocation-model=static",
+  "-C", "force-unwind-tables=no"
+]
