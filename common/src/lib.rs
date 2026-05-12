@@ -11,6 +11,7 @@ pub mod gdt;
 pub mod idt;
 pub mod ioport;
 pub mod macros;
+pub mod mmio;
 pub mod paging;
 pub mod pci;
 pub mod protection;
