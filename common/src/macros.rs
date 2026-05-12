@@ -10,7 +10,7 @@ macro_rules! make_bitmap {
                     if false $(|| $skip_bit(i) )? {
                         continue;
                     }
-                    // PANIC: no panics, values have been purposedly chose not to
+                    // PANIC: no panics, values have been purposedly chosen not to
                     let flag = <$flag_type>::try_from(1 << i).unwrap();
                     if self.is_set(flag) {
                         if printed_once {
@@ -38,7 +38,7 @@ macro_rules! make_bitmap {
                 }
             }
 
-            fn is_set(&self, flag: $flag_type) -> bool {
+            pub fn is_set(&self, flag: $flag_type) -> bool {
                 self.bits & (flag as $flag_unsigned_type) != 0
             }
 
@@ -46,7 +46,7 @@ macro_rules! make_bitmap {
                 self.bits |= flag as $flag_unsigned_type;
             }
 
-            fn clear_flag(&mut self, flag: $flag_type) {
+            pub fn clear_flag(&mut self, flag: $flag_type) {
                 self.bits &= !(flag as $flag_unsigned_type);
             }
         }

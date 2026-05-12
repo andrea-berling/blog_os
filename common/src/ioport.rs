@@ -51,6 +51,18 @@ impl Port {
         result
     }
 
+    pub fn readw(&self) -> u16 {
+        let result: u16;
+        // SAFETY: It is assumed that the user initialised this port with a valid port number
+        unsafe {
+            asm! {
+                "in ax, dx", in("dx") self.port_number, out("ax") result,
+                options(nomem, nostack, preserves_flags)
+            }
+        }
+        result
+    }
+
     pub fn readd(&self) -> u32 {
         let result: u32;
         // SAFETY: It is assumed that the user initialised this port with a valid port number

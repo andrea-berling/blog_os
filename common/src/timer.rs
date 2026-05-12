@@ -5,8 +5,8 @@ use crate::{ioport::Port, make_bitmap};
 
 const TIMER_0_FREQUENCY_HZ: u32 = 1_193_182;
 
-const TIMER_CONTROL_WORD: u8 = 0x43;
-const TIMER_0: u8 = 0x40;
+const TIMER_CONTROL_WORD: u16 = 0x43;
+const TIMER_0: u16 = 0x40;
 
 enum Counter {
     _0,
@@ -69,10 +69,11 @@ fn read_timer_0_counter() -> u16 {
         .select_counter(Counter::_0)
         .counter_latch()
         .binary_countdown();
-    let timer_control_word_port = Port::new(TIMER_CONTROL_WORD as u16);
+    let timer_control_word_port = Port::new(TIMER_CONTROL_WORD);
 
     timer_control_word_port.writeb(u8::from(timer_control_word));
-    (timer_control_word_port.readb() as u16) | ((timer_control_word_port.readb() as u16) << 8)
+    let timer_0_reg = Port::new(TIMER_0);
+    (timer_0_reg.readb() as u16) | ((timer_0_reg.readb() as u16) << 8)
 }
 
 #[derive(Debug)]
