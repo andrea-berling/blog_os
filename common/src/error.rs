@@ -9,25 +9,25 @@ pub const CONTEXT_LENGTH: usize = 16;
 
 #[derive(Clone, Copy, Error, Debug)]
 pub enum Context {
-    #[error("none")]
+    #[error("None")]
     None,
-    #[error("parsing")]
+    #[error("Parsing")]
     Parsing,
-    #[error("loading ELF segment into memory")]
+    #[error("Loading ELF segment into memory")]
     LoadingSegment,
     #[error("I/O")]
     Io,
-    #[error("loading the kernel")]
+    #[error("Loading the kernel")]
     LoadingKernel,
-    #[error("reading kernel bytes from disk")]
+    #[error("Reading kernel bytes from disk")]
     ReadingKernelFromDisk,
-    #[error("preparing to jump to the kernel")]
+    #[error("Preparing to jump to the kernel")]
     PreparingForJumpToKernel,
-    #[error("setting up control register {0}")]
+    #[error("Setting up control register {0}")]
     SettingUpControlRegister(&'static str),
-    #[error("setting up page table")]
+    #[error("Setting up page table")]
     SettingUpPageTable,
-    #[error("setting up processor data structures")]
+    #[error("Setting up processor data structures")]
     SettingUpProcessor,
 }
 
@@ -86,63 +86,63 @@ pub fn try_read_error<U: TryFromBytes>(facility: Facility, err: TryReadError<&[u
 
 #[derive(Clone, Copy, Debug, Error)]
 pub enum Fault {
-    #[error("none")]
+    #[error("None")]
     None,
-    #[error("invalid value for field '{0}'")]
+    #[error("Invalid value for field '{0}'")]
     InvalidValueForField(&'static str),
-    #[error("not supported endianness (Big Endian)")]
+    #[error("Not supported endianness (Big Endian)")]
     UnsupportedEndianness,
-    #[error("invalid value {value_prefix:#x?} for type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Invalid value {value_prefix:#x?} for type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
     InvalidValueForType {
         value_prefix: [u8; CONTEXT_LENGTH],
         dst_type_prefix: [u8; CONTEXT_LENGTH],
     },
-    #[error("incorrect size {size} for destination type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Incorrect size {size} for destination type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
     InvalidSizeForType {
         size: usize,
         dst_type_prefix: [u8; CONTEXT_LENGTH],
     },
-    #[error("incorrect address {address:#x} for destination type {dst_type:?} with alignment {alignment}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Incorrect address {address:#x} for destination type {dst_type:?} with alignment {alignment}", dst_type = core::str::from_utf8(dst_type_prefix))]
     InvalidAddressForType {
         address: u64,
         dst_type_prefix: [u8; CONTEXT_LENGTH],
         alignment: usize,
     },
-    #[error("not enough bytes for '{0}'")]
+    #[error("Not enough bytes for '{0}'")]
     NotEnoughBytesFor(&'static str),
     #[error("Invalid LBA address '{0}' (max allowed: {1})")]
     InvalidLBAAddress(u64, u64),
     #[error("Can't read into the given buffer: needed '{1}' bytes, only have {0}")]
     CantReadIntoBuffer(u64, u64),
-    #[error("timeout ({0} ns)")]
+    #[error("Timeout ({0} ns)")]
     Timeout(u64),
-    #[error("invalid segment parameters: virtual address: {virtual_address}, size: {size}")]
+    #[error("Invalid segment parameters: virtual address: {virtual_address}, size: {size}")]
     InvalidSegmentParameters { virtual_address: u64, size: u64 },
     #[error("I/O error")]
     IOError,
-    #[error("invalid elf")]
+    #[error("Invalid elf")]
     InvalidElf,
-    #[error("unsupported boot medium")]
+    #[error("Unsupported boot medium")]
     UnsupportedBootMedium,
-    #[error("unsupported CPU feature: {0}")]
+    #[error("Unsupported CPU feature: {0}")]
     UnsupportedFeature(Feature),
-    #[error("too many sectors: {0}")]
+    #[error("Too many sectors: {0}")]
     TooManySectors(u32),
-    #[error("hanging ATA device")]
+    #[error("Hanging ATA device")]
     HangingAtaDevice,
     #[error("ATA device not ready for commands")]
     AtaDeviceNotReady,
-    #[error("kernel entrypoint above addressable memory for 32-bit")]
+    #[error("Kernel entrypoint above addressable memory for 32-bit")]
     KernelEntrypointAbove4G,
-    #[error("kernel entrypoint too high for a 1MB stack")]
+    #[error("Kernel entrypoint too high for a 1MB stack")]
     KernelEntrypointTooHigh,
-    #[error("kernel initialization fault")]
+    #[error("Kernel initialization fault")]
     KernelInitialization,
-    #[error("invalid drive parameters pointer: {0:#p}")]
+    #[error("Invalid drive parameters pointer: {0:#p}")]
     InvalidDriveParametersPointer(*const u8),
-    #[error("invalid stack start: {0:#x}")]
+    #[error("Invalid stack start: {0:#x}")]
     InvalidStackStart(u32),
-    #[error("couldn't identify boot device")]
+    #[error("Couldn't identify boot device")]
     FailedBootDeviceIdentification,
 }
 
@@ -154,7 +154,7 @@ pub enum Feature {
 
 #[derive(Clone, Copy, Debug, Error)]
 pub enum Facility {
-    #[error("none")]
+    #[error("None")]
     None,
 
     // EDD
