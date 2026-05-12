@@ -38,6 +38,10 @@ mod xtasks {
             #[arg(short, long, default_value_t = false)]
             /// Collect and print extra info during the build process
             verbose: bool,
+            #[arg(long)]
+            /// Pad final image with zeros to the given size
+            /// A final M means Mebibytes, no suffix means bytes
+            pad_to: Option<String>,
         },
     }
 }
@@ -185,7 +189,7 @@ fn main() -> anyhow::Result<()> {
         .context("canonicalising root dir")?;
 
     match cli.command() {
-        &xtasks::Command::BuildImage { verbose } => {
+        xtasks::Command::BuildImage { verbose, pad_to } => {
             let kernel_path = build_kernel(&root_dir)?;
 
             let metadata = std::fs::metadata(&kernel_path)
@@ -193,13 +197,21 @@ fn main() -> anyhow::Result<()> {
 
             // Build stage1 to read enough sectors to load stage2
             let kernel_sectors = metadata.size().div_ceil(SECTOR_SIZE);
-            let bootloader_path = build_bootloader(&root_dir, kernel_sectors, verbose)?;
+            let bootloader_path = build_bootloader(&root_dir, kernel_sectors, *verbose)?;
 
             let mut image = std::fs::read(&bootloader_path).context("reading bootloader bytes")?;
             let mut kernel = std::fs::read(&kernel_path).context("reading kernel bytes")?;
             kernel.resize((kernel_sectors * SECTOR_SIZE) as usize, 0);
 
             image.append(&mut kernel);
+            if let Some(pad_to) = pad_to {
+                let to_parse = pad_to.strip_suffix("M").unwrap_or(pad_to);
+                let final_size: usize = to_parse
+                    .parse::<usize>()
+                    .context(format!("parsing {pad_to} to a usize"))?
+                    * if pad_to.ends_with("M") { 1 << 20 } else { 1 };
+                image.resize(final_size, 0);
+            }
             let image_path = root_dir.join("disk.img");
 
             std::fs::write(&image_path, image).context("writing image file")?;
