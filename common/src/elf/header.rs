@@ -5,9 +5,7 @@ use num_traits::{AsPrimitive, PrimInt};
 use zerocopy::TryFromBytes;
 
 use crate::elf::{program_header, section};
-use crate::error::{Error, Facility, Fault, try_read_error};
-
-use super::Halfword;
+use crate::error::{self, Context, Error, Facility, Fault, convert_try_read_error};
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U16, U32, U64};
@@ -138,10 +136,10 @@ pub enum ObjectType {
     HiProc = 0xffff,
 }
 
-impl TryFrom<Halfword> for ObjectType {
-    type Error = Halfword;
+impl TryFrom<u16> for ObjectType {
+    type Error = u16;
 
-    fn try_from(value: Halfword) -> core::result::Result<Self, Self::Error> {
+    fn try_from(value: u16) -> core::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(ObjectType::None),
             1 => Ok(ObjectType::Relocatable),
@@ -277,7 +275,7 @@ struct ElfIdentifier {
 pub struct Header(inner::Header);
 
 impl Header {
-    fn size(&self) -> Halfword {
+    fn size(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.size.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.size.get(),
@@ -298,14 +296,14 @@ impl Header {
         }
     }
 
-    pub fn program_header_entry_size(&self) -> Halfword {
+    pub fn program_header_entry_size(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.program_header_entry_size.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.program_header_entry_size.get(),
         }
     }
 
-    pub fn program_header_entries(&self) -> Halfword {
+    pub fn program_header_entries(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.program_header_entries.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.program_header_entries.get(),
@@ -319,14 +317,14 @@ impl Header {
         }
     }
 
-    pub fn section_header_entry_size(&self) -> Halfword {
+    pub fn section_header_entry_size(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.section_header_entry_size.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.section_header_entry_size.get(),
         }
     }
 
-    pub fn section_header_entries(&self) -> Halfword {
+    pub fn section_header_entries(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.section_header_entries.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.section_header_entries.get(),
@@ -361,7 +359,7 @@ impl Header {
         }
     }
 
-    pub fn string_table_index(&self) -> Halfword {
+    pub fn string_table_index(&self) -> u16 {
         match &self.0 {
             inner::Header::Elf32(elf32_header) => elf32_header.string_table_index.get(),
             inner::Header::Elf64(elf64_header) => elf64_header.string_table_index.get(),
@@ -387,33 +385,37 @@ impl Header {
 impl TryFrom<&[u8]> for Header {
     type Error = Error;
 
-    fn try_from(bytes: &[u8]) -> core::result::Result<Header, Self::Error> {
+    fn try_from(bytes: &[u8]) -> error::Result<Header> {
         let (elf_identifier, _rest) = ElfIdentifier::try_read_from_prefix(bytes)
-            .map_err(|err| try_read_error(Facility::ElfHeader, err))?;
+            .map_err(convert_try_read_error)
+            .map_err(|err| {
+                err.with_facility(Facility::ElfHeader)
+                    .with_context(Context::Parsing)
+            })?;
+
+        let error = Error::blank()
+            .with_context(Context::Parsing)
+            .with_facility(Facility::ElfHeader);
 
         if elf_identifier.magic != *b"\x7fELF" {
-            return Err(Error::parsing_error(
-                Fault::InvalidValueForField("magic"),
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::InvalidValueForField("magic")));
         }
 
         if elf_identifier.encoding != Encoding::LittleEndian {
-            return Err(Error::parsing_error(
-                Fault::UnsupportedEndianness,
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::UnsupportedEndianness));
         }
 
         let elf_header = Header(match elf_identifier.class {
             Class::Elf32 => inner::Header::Elf32(
                 inner::Elf32Header::try_read_from_prefix(bytes)
-                    .map_err(|err| try_read_error(Facility::ElfHeader, err))?
+                    .map_err(convert_try_read_error)
+                    .map_err(error::with!(Facility::ElfHeader))?
                     .0,
             ),
             Class::Elf64 => inner::Header::Elf64(
                 inner::Elf64Header::try_read_from_prefix(bytes)
-                    .map_err(|err| try_read_error(Facility::ElfHeader, err))?
+                    .map_err(convert_try_read_error)
+                    .map_err(error::with!(Facility::ElfHeader))?
                     .0,
             ),
         });
@@ -423,29 +425,19 @@ impl TryFrom<&[u8]> for Header {
             inner::Header::Elf64(elf64_header) => elf64_header.r#type.get(),
         };
 
-        let _ = ObjectType::try_from(type_halfword).map_err(|_| {
-            Error::parsing_error(Fault::InvalidValueForField("type"), Facility::ElfHeader)
-        })?;
+        let _ = ObjectType::try_from(type_halfword)
+            .map_err(|_| error.with_fault(Fault::InvalidValueForField("type")))?;
 
         if elf_identifier.encoding != Encoding::LittleEndian {
-            return Err(Error::parsing_error(
-                Fault::UnsupportedEndianness,
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::UnsupportedEndianness));
         }
 
         if elf_header.version() != Version::Current {
-            return Err(Error::parsing_error(
-                Fault::InvalidValueForField("version"),
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::InvalidValueForField("version")));
         }
 
-        if elf_header.size() != inner::HEADER_SIZE[elf_header.class() as usize] as Halfword {
-            return Err(Error::parsing_error(
-                Fault::InvalidValueForField("size"),
-                Facility::ElfHeader,
-            ));
+        if elf_header.size() != inner::HEADER_SIZE[elf_header.class() as usize] as u16 {
+            return Err(error.with_fault(Fault::InvalidValueForField("size")));
         }
 
         if elf_header.program_header_entry_size() as usize
@@ -454,10 +446,7 @@ impl TryFrom<&[u8]> for Header {
                 Class::Elf64 => program_header::ELF64_ENTRY_SIZE,
             })
         {
-            return Err(Error::parsing_error(
-                Fault::InvalidValueForField("phentsize"),
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::InvalidValueForField("phentsize")));
         }
 
         if elf_header.section_header_entry_size() as usize
@@ -466,10 +455,7 @@ impl TryFrom<&[u8]> for Header {
                 Class::Elf64 => section::ELF64_ENTRY_SIZE,
             })
         {
-            return Err(Error::parsing_error(
-                Fault::InvalidValueForField("shentsize"),
-                Facility::ElfHeader,
-            ));
+            return Err(error.with_fault(Fault::InvalidValueForField("shentsize")));
         }
 
         Ok(elf_header)
@@ -531,7 +517,7 @@ impl core::fmt::Display for Header {
 
 #[cfg(test)]
 mod tests {
-    use zerocopy::{LE, U16, U32, U64};
+    use zerocopy::{U16, U32, U64};
 
     use crate::elf::header::{
         ElfIdentifier, Header, Machine, ObjectType, Version,
@@ -616,4 +602,3 @@ mod tests {
         );
     }
 }
-

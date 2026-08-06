@@ -1,6 +1,4 @@
 // https://www.alldatasheet.com/datasheet-pdf/download/66093/INTEL/PIIX3.html
-use core::arch::asm;
-
 use crate::{ioport::Port, make_bitmap};
 
 const TIMER_0_FREQUENCY_HZ: u32 = 1_193_182;

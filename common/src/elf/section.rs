@@ -4,8 +4,8 @@ use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;
 
 use crate::{
-    elf::{Halfword, Word, header},
-    error::{Error, Facility, Fault, try_read_error},
+    elf::header,
+    error::{self, Context, Error, Facility, Fault, convert_try_read_error},
     make_bitmap,
 };
 
@@ -80,10 +80,10 @@ pub(crate) enum SectionEntryType {
     UserSpecific(u32),
 }
 
-impl TryFrom<Word> for SectionEntryType {
-    type Error = Word;
+impl TryFrom<u32> for SectionEntryType {
+    type Error = u32;
 
-    fn try_from(value: Word) -> core::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(SectionEntryType::Null),
             1 => Ok(SectionEntryType::Progbits),
@@ -183,7 +183,7 @@ pub enum Section<'a> {
 }
 
 impl<'a> Section<'a> {
-    pub fn downcast_to_string_table(&self) -> Result<StringTable<'a>, Facility> {
+    pub fn downcast_to_string_table(&self) -> error::Result<StringTable<'a>> {
         match self {
             Section::StringTable(items) => Ok(StringTable(items)),
         }
@@ -194,40 +194,31 @@ impl<'a> Section<'a> {
 pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
-    pub(crate) fn try_from_bytes(
-        bytes: &[u8],
-        class: header::Class,
-        facility: Facility,
-    ) -> Result<Self, Error> {
+    pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
+        let error = Error::blank().with_context(Context::Parsing);
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(convert_try_read_error)
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
                     if SectionEntryType::try_from(type_halfword).is_ok() {
                         Ok(header_entry)
                     } else {
-                        Err(Error::parsing_error(
-                            Fault::InvalidValueForField("type"),
-                            facility,
-                        ))
+                        Err(error.with_fault(Fault::InvalidValueForField("type")))
                     }
                 })
                 .map(inner::HeaderEntry::Elf32)
                 .map(HeaderEntry),
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(convert_try_read_error)
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
                     if SectionEntryType::try_from(type_halfword).is_ok() {
                         Ok(header_entry)
                     } else {
-                        Err(Error::parsing_error(
-                            Fault::InvalidValueForField("type"),
-                            facility,
-                        ))
+                        Err(error.with_fault(Fault::InvalidValueForField("type")))
                     }
                 })
                 .map(inner::HeaderEntry::Elf64)
@@ -235,7 +226,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn name_index(&self) -> Word {
+    pub fn name_index(&self) -> u32 {
         match &self.0 {
             inner::HeaderEntry::Elf32(entry) => entry.name_index.get(),
             inner::HeaderEntry::Elf64(entry) => entry.name_index.get(),
@@ -301,7 +292,7 @@ impl HeaderEntry {
         }
     }
 
-    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> Result<Section<'b>, Error>
+    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> error::Result<Section<'b>>
     where
         'b: 'a,
     {
@@ -364,15 +355,16 @@ impl<'a> SectionHeaderEntries<'a> {
     pub(crate) fn new(
         bytes: &'a [u8],
         class: header::Class,
-        n_entries: Halfword,
-    ) -> Result<Self, Error> {
+        n_entries: u16,
+    ) -> error::Result<Self> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
         };
         if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
-            return Err(Error::parsing_error(
+            return Err(Error::new(
                 Fault::NotEnoughBytesFor("sections"),
+                Context::Parsing,
                 Facility::ElfSectionHeader,
             ));
         }
@@ -386,7 +378,7 @@ impl<'a> SectionHeaderEntries<'a> {
 }
 
 impl<'a> Iterator for SectionHeaderEntries<'a> {
-    type Item = Result<HeaderEntry, Error>;
+    type Item = error::Result<HeaderEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -399,14 +391,13 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
         };
 
         Some(
-            HeaderEntry::try_from_bytes(
-                self.bytes.get(self.bytes_read_so_far..)?,
-                self.class,
-                Facility::ElfSectionHeaderEntry(entry_size as Halfword),
-            )
-            .inspect(|_| {
-                self.bytes_read_so_far += entry_size;
-            }),
+            HeaderEntry::try_from_bytes(self.bytes.get(self.bytes_read_so_far..)?, self.class)
+                .map_err(error::with!(Facility::ElfSectionHeaderEntry(
+                    entry_size as u16
+                )))
+                .inspect(|_| {
+                    self.bytes_read_so_far += entry_size;
+                }),
         )
     }
 }
@@ -541,12 +532,9 @@ mod tests {
 
     #[test]
     fn test_headers_64bit() {
-        let mut header = HeaderEntry::try_from_bytes(
-            &NULL_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        let mut header =
+            HeaderEntry::try_from_bytes(&NULL_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(0, header.name_index());
         assert_eq!(SectionEntryType::Null, header.r#type());
         assert_eq!(Flags::empty(), header.flags());
@@ -561,7 +549,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &PROGBITS_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(1, header.name_index());
@@ -575,12 +562,9 @@ mod tests {
         assert_eq!(0x1, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &NOTE_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&NOTE_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(9, header.name_index());
         assert_eq!(SectionEntryType::Note, header.r#type());
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
@@ -595,7 +579,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &DYNSYM_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(42, header.name_index());
@@ -612,7 +595,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &OS_SPECIFIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(50, header.name_index());
@@ -629,7 +611,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &STRING_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(88, header.name_index());
@@ -643,12 +624,9 @@ mod tests {
         assert_eq!(0x1, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &RELA_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&RELA_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(96, header.name_index());
         assert_eq!(SectionEntryType::Rela, header.r#type());
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
@@ -663,7 +641,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RELA_PLT_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(106, header.name_index());
@@ -680,7 +657,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RODATA_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(135, header.name_index());
@@ -697,12 +673,9 @@ mod tests {
         assert_eq!(0x10, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &TEXT_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&TEXT_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(185, header.name_index());
         assert_eq!(SectionEntryType::Progbits, header.r#type());
         assert_eq!(
@@ -717,12 +690,9 @@ mod tests {
         assert_eq!(0x10, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &GOT_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&GOT_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(267, header.name_index());
         assert_eq!(SectionEntryType::Progbits, header.r#type());
         assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
@@ -734,12 +704,9 @@ mod tests {
         assert_eq!(0x8, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &BSS_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&BSS_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(318, header.name_index());
         assert_eq!(SectionEntryType::NoBits, header.r#type());
         assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
@@ -754,7 +721,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &SYMBOL_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(458, header.name_index());
@@ -807,12 +773,9 @@ mod tests {
 
     #[test]
     fn test_headers_32bit() {
-        let mut header = HeaderEntry::try_from_bytes(
-            &NULL_HEADER_32_BIT[..],
-            crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        let mut header =
+            HeaderEntry::try_from_bytes(&NULL_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
+                .unwrap();
         assert_eq!(0, header.name_index());
         assert_eq!(SectionEntryType::Null, header.r#type());
         assert_eq!(Flags::empty(), header.flags());
@@ -824,12 +787,9 @@ mod tests {
         assert_eq!(0, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &TEXT_HEADER_32_BIT[..],
-            crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&TEXT_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
+                .unwrap();
         assert_eq!(1, header.name_index());
         assert_eq!(SectionEntryType::Progbits, header.r#type());
         assert_eq!(
@@ -847,7 +807,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &RODATA_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(7, header.name_index());
@@ -864,12 +823,9 @@ mod tests {
         assert_eq!(0x10, header.address_alignment());
         assert_eq!(0, header.entry_size());
 
-        header = HeaderEntry::try_from_bytes(
-            &BSS_HEADER_32_BIT[..],
-            crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&BSS_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
+                .unwrap();
         assert_eq!(15, header.name_index());
         assert_eq!(SectionEntryType::NoBits, header.r#type());
         assert_eq!(FlagType::Allocated | FlagType::Writeable, header.flags());
@@ -884,7 +840,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &SYMBOL_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(20, header.name_index());
@@ -901,7 +856,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &STRING_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            Facility::ElfSectionHeader,
         )
         .unwrap();
         assert_eq!(28, header.name_index());
@@ -916,4 +870,3 @@ mod tests {
         assert_eq!(0, header.entry_size());
     }
 }
-

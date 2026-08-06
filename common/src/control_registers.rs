@@ -2,7 +2,7 @@ use core::arch::asm;
 
 // https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf
 use crate::{
-    error::{Fault, bounded_context},
+    error::{self, Error, Fault},
     make_bitmap, paging,
 };
 
@@ -35,14 +35,14 @@ pub enum ControlRegister3Bit {
 make_bitmap!(new_type: ControlRegister3, underlying_flag_type: ControlRegister3Bit, repr: u64, nodisplay);
 
 impl ControlRegister3 {
-    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> Result<(), Fault> {
+    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> error::Result<()> {
         let address = pml4 as *const _ as u64;
         if !address.is_multiple_of(0x1000) {
-            return Err(Fault::InvalidAddressForType {
+            return Err(Error::blank().with_fault(Fault::InvalidAddressForType {
                 address,
-                dst_type_prefix: bounded_context(core::any::type_name::<paging::PML4>().as_bytes()),
+                dst_type_name: core::any::type_name::<paging::PML4>().as_bytes().into(),
                 alignment: 0x1000,
-            });
+            }));
         }
         self.bits = address;
         Ok(())

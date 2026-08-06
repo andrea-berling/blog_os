@@ -2,7 +2,12 @@ use core::{fmt::Display, time::Duration};
 
 use num_enum::TryFromPrimitive;
 
-use crate::{make_bitmap, mmio, timer::LowPrecisionTimer};
+use crate::{
+    error::{self, Context, Error, Facility, Fault},
+    make_bitmap, mmio,
+    pci::ConfigAddressRegister,
+    timer::LowPrecisionTimer,
+};
 
 pub mod queue_head;
 pub mod transfer_descriptor;
@@ -56,6 +61,24 @@ impl HostControllerStructuralParameters {
 pub enum HCIVersion {
     _1_0,
 }
+
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u32)]
+pub enum USBLegacySupportExtendedCapabilityFlag {
+    OsOwned = 1 << 24,
+    BiosOwned = 1 << 16,
+}
+
+impl Display for USBLegacySupportExtendedCapabilityFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            USBLegacySupportExtendedCapabilityFlag::OsOwned => f.write_str("OS Owned"),
+            USBLegacySupportExtendedCapabilityFlag::BiosOwned => f.write_str("BIOS Owned"),
+        }
+    }
+}
+
+make_bitmap!(new_type: USBLegacySupportExtendedCapability, underlying_flag_type: USBLegacySupportExtendedCapabilityFlag, repr: u32, bit_skipper: |i| i != 24 && i != 16);
 
 // NOTE: the u32 in this slice should not be read directly! You should take addr_of(ports[i])
 // and do a volatile read
@@ -113,15 +136,36 @@ impl Iterator for PortsIterator<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum Owner {
+    Bios,
+    Os,
+}
+
+impl Display for Owner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Owner::Bios => f.write_str("BIOS"),
+            Owner::Os => f.write_str("OS"),
+        }
+    }
+}
+
 pub struct Controller {
     base_address: u32,
     capability_register_length: u8,
     hcsp: HostControllerStructuralParameters,
+    eecp_pci_offset: Option<u8>,
+    pci_config_addr: ConfigAddressRegister,
+    has_64_bit_addressing_capability: bool,
+    usb_command_register: mmio::Volatile,
+    usb_status_register: mmio::Volatile,
+    owner: Option<Owner>,
     ports: Ports<'static>,
 }
 
 impl Controller {
-    pub fn new(base_address: u32) -> Self {
+    pub fn new(base_address: u32, pci_config_addr: ConfigAddressRegister) -> Self {
         // SAFETY: It is assumed that the given address points to the base of a EHCI device
         // Else it's UB
         let capability_register_length = mmio::Volatile::new(base_address).readb();
@@ -129,7 +173,14 @@ impl Controller {
             bits: mmio::Volatile::new(base_address + 4).readd(),
         };
         let n_ports = hcsp.n_ports();
-        Self {
+        let hccp = mmio::Volatile::new(base_address + 8).readd();
+        let eecp_pci_offset = ((hccp >> 8) & 0xff) as u8;
+        let has_64_bit_addressing_capability = (hccp & 0x1) != 0;
+        let operational_base = u32::from(capability_register_length) + base_address;
+        let usb_command_register = mmio::Volatile::new(operational_base);
+        let usb_status_register = mmio::Volatile::new(operational_base + 0x04);
+        // TODO: check that eccp_pci_offset >= 0x40 and 32-bit aligned!
+        let mut controller = Self {
             base_address,
             hcsp,
             // SAFETY: it is assumed that the value reported in the HCSP register is the correct
@@ -140,7 +191,86 @@ impl Controller {
                     n_ports as usize,
                 )
             }),
+            eecp_pci_offset: if eecp_pci_offset != 0 {
+                Some(eecp_pci_offset)
+            } else {
+                None
+            },
+            has_64_bit_addressing_capability,
+            pci_config_addr,
             capability_register_length,
+            usb_command_register,
+            usb_status_register,
+            owner: None,
+        };
+        Self {
+            owner: controller.read_owner_from_usblegsup(),
+            ..controller
+        }
+    }
+
+    fn usb_legsup(&mut self) -> Option<USBLegacySupportExtendedCapability> {
+        if let Some(eecp_pci_offset) = self.eecp_pci_offset {
+            self.pci_config_addr.set_register_offset(eecp_pci_offset);
+            Some(self.pci_config_addr.read_dword().into())
+        } else {
+            None
+        }
+    }
+
+    fn read_owner_from_usblegsup(&mut self) -> Option<Owner> {
+        if let Some(usb_legsup) = self.usb_legsup() {
+            if usb_legsup.is_set(USBLegacySupportExtendedCapabilityFlag::OsOwned)
+                && !usb_legsup.is_set(USBLegacySupportExtendedCapabilityFlag::BiosOwned)
+            {
+                Some(Owner::Os)
+            } else if !usb_legsup.is_set(USBLegacySupportExtendedCapabilityFlag::OsOwned)
+                && usb_legsup.is_set(USBLegacySupportExtendedCapabilityFlag::BiosOwned)
+            {
+                Some(Owner::Bios)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn owner(&self) -> Option<Owner> {
+        self.owner
+    }
+
+    pub fn switch_ownership(&mut self, owner: Owner) -> error::Result<()> {
+        let error =
+            Error::blank().with_facility(Facility::EhciController(self.pci_config_addr.into()));
+        match owner {
+            Owner::Bios => todo!(),
+            Owner::Os => {
+                let Some(mut usb_legsup) = self.usb_legsup() else {
+                    return Err(error.with_fault(Fault::NoUSBLEGSUP));
+                };
+                let Some(eecp_pci_offset) = self.eecp_pci_offset else {
+                    return Err(error.with_fault(Fault::NoEECP));
+                };
+                usb_legsup.set_flag(USBLegacySupportExtendedCapabilityFlag::OsOwned);
+                usb_legsup.clear_flag(USBLegacySupportExtendedCapabilityFlag::BiosOwned);
+                self.pci_config_addr.set_register_offset(eecp_pci_offset);
+                self.pci_config_addr.write_dword(usb_legsup.into());
+                // TODO: make macro out of this
+                let timeout_ms = Duration::from_millis(100);
+                let mut timeout_timer =
+                    crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
+                while !matches!(self.owner(), Some(Owner::Os)) && !timeout_timer.timeout() {
+                    timeout_timer.update();
+                }
+                if timeout_timer.timeout() && !matches!(self.owner(), Some(Owner::Os)) {
+                    return Err(error
+                        .with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64))
+                        .with_context(Context::WaitingHostControllerOwnershipSwitch));
+                }
+                self.owner = Some(owner);
+                Ok(())
+            }
         }
     }
 
@@ -162,9 +292,69 @@ impl Controller {
         &self.ports
     }
 
-    /// # Panics
-    /// If EHCI reset fails
-    pub fn reset_port(&self, index: usize) {
+    pub fn halt(&mut self) -> error::Result<()> {
+        let error = Error::blank()
+            .with_facility(Facility::EhciController(self.pci_config_addr.into()))
+            .with_context(Context::HaltingEhciController);
+        let usb_status: USBStatusRegister = self.usb_status_register.readd().into();
+        if !usb_status.is_set(USBStatusRegisterFlag::HostControllerHalted) {
+            let mut usb_command_register: USBCommandRegister =
+                self.usb_command_register.readd().into();
+            usb_command_register.clear_flag(USBCommandRegisterFlag::Run);
+            self.usb_status_register.writed(usb_command_register.into());
+
+            let timeout_ms = Duration::from_millis(100);
+            let mut timeout_timer =
+                crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
+            while USBCommandRegister::from(self.usb_command_register.readd())
+                .is_set(USBCommandRegisterFlag::HostControllerReset)
+                && !timeout_timer.timeout()
+            {
+                timeout_timer.update();
+            }
+            if timeout_timer.timeout()
+                && !USBStatusRegister::from(self.usb_status_register.readd())
+                    .is_set(USBStatusRegisterFlag::HostControllerHalted)
+            {
+                return Err(error.with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64)));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> error::Result<()> {
+        let error = Error::blank()
+            .with_facility(Facility::EhciController(self.pci_config_addr.into()))
+            .with_context(Context::ResettingEhciController);
+        self.halt()?;
+
+        let usb_command_register: USBCommandRegister =
+            USBCommandRegisterFlag::HostControllerReset.into();
+        self.usb_command_register
+            .writed(usb_command_register.into());
+
+        let timeout_ms = Duration::from_millis(100);
+        let mut timeout_timer = crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
+        while USBCommandRegister::from(self.usb_command_register.readd())
+            .is_set(USBCommandRegisterFlag::HostControllerReset)
+            && !timeout_timer.timeout()
+        {
+            timeout_timer.update();
+        }
+        if timeout_timer.timeout()
+            && !USBCommandRegister::from(self.usb_command_register.readd())
+                .is_set(USBCommandRegisterFlag::HostControllerReset)
+        {
+            return Err(error.with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64)));
+        }
+        Ok(())
+    }
+
+    pub fn initialize() -> error::Result<()> {
+        Ok(())
+    }
+
+    pub fn reset_port(&self, index: usize) -> error::Result<()> {
         let mut port = self.ports().get(index);
         port.set_flag(PortStatusAndControlRegisterFlag::Reset);
         port.clear_flag(PortStatusAndControlRegisterFlag::Enabled);
@@ -175,7 +365,9 @@ impl Controller {
         }
         port.clear_flag(PortStatusAndControlRegisterFlag::Reset);
         self.ports().set(index, port);
-        let mut timer = LowPrecisionTimer::new(Duration::from_millis(2).as_nanos() as u64);
+        let clear_reset_timeout_ms = 2;
+        let mut timer =
+            LowPrecisionTimer::new(Duration::from_millis(clear_reset_timeout_ms).as_nanos() as u64);
         while let port = self.ports().get(index)
             && !port.is_set(PortStatusAndControlRegisterFlag::Enabled)
             && !timer.timeout()
@@ -184,9 +376,13 @@ impl Controller {
         }
 
         if timer.timeout() {
-            // TODO: return Result instead of panicking
-            panic!("Couldn't initialise USB port");
+            return Err(Error::new(
+                Fault::Timeout(clear_reset_timeout_ms),
+                Context::WaitingUSBPortResetClear(index as u8),
+                Facility::EhciController(self.pci_config_addr.into()),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -199,6 +395,26 @@ impl Display for Controller {
             writeln!(f, "Port number: {i}")?;
             writeln!(f, "{port}")?;
         }
+        writeln!(
+            f,
+            "EHCI Extended Capabilities Pointer: {:#x?}",
+            self.eecp_pci_offset
+        )?;
+
+        writeln!(
+            f,
+            "PCI address: {:02x}:{:02x}.{}",
+            self.pci_config_addr.get_bus_number(),
+            self.pci_config_addr.get_device_number(),
+            self.pci_config_addr.get_function_number(),
+        )?;
+
+        writeln!(f, "Owner: {:?}", self.owner())?;
+        writeln!(
+            f,
+            "64-bit Addressing Capability: {}",
+            self.has_64_bit_addressing_capability
+        )?;
         Ok(())
     }
 }
@@ -260,6 +476,50 @@ impl Display for PortStatusAndControlRegisterFlag {
 }
 
 make_bitmap!(new_type: PortStatusAndControlRegister, underlying_flag_type: PortStatusAndControlRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBInterruptEnableRegisterFlag {
+    ThresholdInterrupts = 1 << 0,
+    USBError = 1 << 1,
+    PortChange = 1 << 2,
+    FrameListRollover = 1 << 3,
+    HostSystemError = 1 << 4,
+    InterruptOnAsyncAdvance = 1 << 5,
+}
+
+make_bitmap!(new_type: USBInterruptEnableRegister, underlying_flag_type: USBInterruptEnableRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBCommandRegisterFlag {
+    Run = 1 << 0,
+    HostControllerReset = 1 << 1,
+    PeriodicScheduleEnable = 1 << 4,
+    AsynchronousScheduleEnable = 1 << 5,
+    InterruptOnAsyncAdvanceDoorbell = 1 << 6,
+    LightHostControllerReset = 1 << 7,
+    AsynchronousScheduleParkModeEnable = 1 << 11,
+}
+
+make_bitmap!(new_type: USBCommandRegister, underlying_flag_type: USBCommandRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBStatusRegisterFlag {
+    USBInterrupt = 1 << 0,
+    USBErrorInterrupt = 1 << 1,
+    PortChangeDetect = 1 << 2,
+    FrameListRollover = 1 << 3,
+    HostSystemError = 1 << 4,
+    InterruptOnAsyncAdvance = 1 << 5,
+    HostControllerHalted = 1 << 12,
+    Reclamation = 1 << 13,
+    PeriodicScheduleStatus = 1 << 14,
+    AsynchronousScheduleStatus = 1 << 15,
+}
+
+make_bitmap!(new_type: USBStatusRegister, underlying_flag_type: USBStatusRegisterFlag, repr: u32, nodisplay);
 
 #[derive(TryFromPrimitive, Debug)]
 #[repr(u8)]

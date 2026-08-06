@@ -1,11 +1,11 @@
 use crate::{
-    elf::{Halfword, header},
-    error::{Facility, Fault},
+    elf::header,
+    error::{self, Context, Facility, Fault},
     make_bitmap,
 };
 
 use crate::elf::Error;
-use crate::error::try_read_error;
+use crate::error::convert_try_read_error;
 
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
@@ -74,31 +74,22 @@ make_bitmap!(new_type: Permissions, underlying_flag_type: PermissionFlag, repr: 
 pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
-    pub(crate) fn try_from_bytes(
-        bytes: &[u8],
-        class: header::Class,
-        facility: Facility,
-    ) -> Result<Self, Error> {
+    pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
+        let error = Error::blank().with_context(Context::Parsing);
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(convert_try_read_error)
                 .and_then(|(header_entry, _rest)| {
-                    let type_halfword = header_entry.r#type.get();
+                    let type_u16 = header_entry.r#type.get();
 
-                    if ProgramHeaderEntryType::try_from(type_halfword).is_err() {
-                        return Err(Error::parsing_error(
-                            Fault::InvalidValueForField("type"),
-                            facility,
-                        ));
+                    if ProgramHeaderEntryType::try_from(type_u16).is_err() {
+                        return Err(error.with_fault(Fault::InvalidValueForField("type")));
                     }
 
                     let flags_word = header_entry.flags.get();
 
                     if flags_word > 7 {
-                        return Err(Error::parsing_error(
-                            Fault::InvalidValueForField("flags"),
-                            facility,
-                        ));
+                        return Err(error.with_fault(Fault::InvalidValueForField("flags")));
                     }
 
                     Ok(header_entry)
@@ -107,17 +98,14 @@ impl HeaderEntry {
                 .map(HeaderEntry),
 
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(|err| try_read_error(facility, err))
+                .map_err(convert_try_read_error)
                 .and_then(|(header_entry, _rest)| {
-                    let type_halfword = header_entry.r#type.get();
+                    let type_u16 = header_entry.r#type.get();
 
-                    if ProgramHeaderEntryType::try_from(type_halfword).is_ok() {
+                    if ProgramHeaderEntryType::try_from(type_u16).is_ok() {
                         Ok(header_entry)
                     } else {
-                        Err(Error::parsing_error(
-                            Fault::InvalidValueForField("type"),
-                            facility,
-                        ))
+                        Err(error.with_fault(Fault::InvalidValueForField("type")))
                     }
                 })
                 .map(inner::HeaderEntry::Elf64)
@@ -301,15 +289,16 @@ impl<'a> ProgramHeaderEntries<'a> {
     pub(crate) fn new(
         bytes: &'a [u8],
         class: header::Class,
-        n_entries: Halfword,
-    ) -> Result<Self, Error> {
+        n_entries: u16,
+    ) -> error::Result<Self> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
         };
         if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
-            return Err(Error::parsing_error(
+            return Err(Error::new(
                 Fault::NotEnoughBytesFor("program headers"),
+                Context::Parsing,
                 Facility::ElfProgramHeader,
             ));
         }
@@ -323,7 +312,7 @@ impl<'a> ProgramHeaderEntries<'a> {
 }
 
 impl<'a> Iterator for ProgramHeaderEntries<'a> {
-    type Item = Result<HeaderEntry, Error>;
+    type Item = error::Result<HeaderEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -336,14 +325,13 @@ impl<'a> Iterator for ProgramHeaderEntries<'a> {
         };
 
         Some(
-            HeaderEntry::try_from_bytes(
-                self.bytes.get(self.bytes_read_so_far..)?,
-                self.class,
-                Facility::ElfProgramHeaderEntry(entry_size as Halfword),
-            )
-            .inspect(|_| {
-                self.bytes_read_so_far += entry_size;
-            }),
+            HeaderEntry::try_from_bytes(self.bytes.get(self.bytes_read_so_far..)?, self.class)
+                .map_err(|err| {
+                    err.with_facility(Facility::ElfProgramHeaderEntry(entry_size as u16))
+                })
+                .inspect(|_| {
+                    self.bytes_read_so_far += entry_size;
+                }),
         )
     }
 }
@@ -351,12 +339,9 @@ impl<'a> Iterator for ProgramHeaderEntries<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        elf::{
-            self,
-            program_header::{
-                HeaderEntry, PermissionFlag, Permissions, ProgramHeaderEntryType,
-                inner::{Elf32HeaderEntry, Elf64HeaderEntry},
-            },
+        elf::program_header::{
+            HeaderEntry, PermissionFlag, Permissions, ProgramHeaderEntryType,
+            inner::{Elf32HeaderEntry, Elf64HeaderEntry},
         },
         error::Facility,
     };
@@ -412,12 +397,9 @@ mod tests {
 
     #[test]
     fn test_headers_64bit() {
-        let mut header = HeaderEntry::try_from_bytes(
-            &PHDR_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
-        )
-        .unwrap();
+        let mut header =
+            HeaderEntry::try_from_bytes(&PHDR_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(ProgramHeaderEntryType::ProgramHeader, header.r#type());
         assert_eq!(0x40, header.offset());
         assert_eq!(0x40, header.virtual_address());
@@ -433,7 +415,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &INTERPRETER_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(ProgramHeaderEntryType::Interpreter, header.r#type());
@@ -451,7 +432,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &PT_LOAD_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
@@ -466,12 +446,9 @@ mod tests {
             header.permissions()
         );
 
-        header = HeaderEntry::try_from_bytes(
-            &TLS_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&TLS_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(ProgramHeaderEntryType::ThreadLocalStorage, header.r#type());
         assert_eq!(0x80940, header.offset());
         assert_eq!(0x82940, header.virtual_address());
@@ -487,7 +464,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &DYNAMIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(ProgramHeaderEntryType::Dynamic, header.r#type());
@@ -505,7 +481,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &PROCESSOR_SPECIFIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(
@@ -523,12 +498,9 @@ mod tests {
             header.permissions()
         );
 
-        header = HeaderEntry::try_from_bytes(
-            &NOTE_HEADER_64_BIT[..],
-            crate::elf::header::Class::Elf64,
-            Facility::ElfProgramHeader,
-        )
-        .unwrap();
+        header =
+            HeaderEntry::try_from_bytes(&NOTE_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
+                .unwrap();
         assert_eq!(ProgramHeaderEntryType::Note, header.r#type());
         assert_eq!(0x2fc, header.offset());
         assert_eq!(0x2fc, header.virtual_address());
@@ -559,7 +531,6 @@ mod tests {
         let mut header = HeaderEntry::try_from_bytes(
             &PT_LOAD_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
@@ -577,7 +548,6 @@ mod tests {
         header = HeaderEntry::try_from_bytes(
             &PROCESSOR_SPECIFIC_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
-            Facility::ElfProgramHeader,
         )
         .unwrap();
         assert_eq!(

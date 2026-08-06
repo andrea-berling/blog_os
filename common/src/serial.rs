@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 use crate::{ioport::Port, make_bitmap};
 
 const COM1: u16 = 0x3F8;
@@ -190,3 +188,16 @@ macro_rules! serial_writeln_no_sync {
 }
 
 pub use serial_writeln_no_sync as writeln_no_sync;
+
+pub mod log {
+    #[macro_export]
+    macro_rules! serial_debug_no_sync {
+    ($format_string:literal$(, $args:expr)*) => {
+        if $crate::DEBUG {
+            $crate::serial::writeln_no_sync!($format_string $(,$args)*)
+        }
+    };
+    }
+
+    pub use serial_debug_no_sync as debug_no_sync;
+}

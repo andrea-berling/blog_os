@@ -5,6 +5,7 @@ use core::arch::x86_64::__cpuid;
 use core::cmp::min;
 
 use crate::{
+    error,
     error::{Fault, Feature},
     make_bitmap,
 };
@@ -60,12 +61,12 @@ const EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS: u32 = 0x80000001;
 
 fn get_max_physical_address_width() -> u8 {
     // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
-    unsafe { __cpuid(LINEAR_PHYSICAL_ADDRESS_SIZE).eax as u8 }
+    __cpuid(LINEAR_PHYSICAL_ADDRESS_SIZE).eax as u8
 }
 
 fn supports_1gb_pages() -> bool {
     // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
-    let result = unsafe { __cpuid(EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS).edx };
+    let result = __cpuid(EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS).edx;
 
     ExtendedProcessorSignatureAndFeatures::from(result)
         .is_set(ExtendedProcessorSignatureAndFeatureBit::_1GBPagesAvailable)
@@ -143,11 +144,13 @@ impl_deref_to_page_table_entry!(PageDirectoryPointerTableEntry);
 pub struct _1GPage(*const u8);
 
 impl TryFrom<*const u8> for _1GPage {
-    type Error = Fault;
+    type Error = error::Error;
 
-    fn try_from(bytes: *const u8) -> Result<Self, Fault> {
+    fn try_from(bytes: *const u8) -> error::Result<Self> {
         if !supports_1gb_pages() {
-            return Err(Fault::UnsupportedFeature(Feature::_1GBPages));
+            return Err(
+                error::Error::blank().with_fault(Fault::UnsupportedFeature(Feature::_1GBPages))
+            );
         }
         Ok(Self(bytes))
     }

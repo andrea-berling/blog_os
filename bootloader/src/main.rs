@@ -37,6 +37,7 @@ use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     vga::writeln_no_sync!("{info:#?}");
+    serial::log::debug_no_sync!("{info:#?}");
     loop {}
 }
 
@@ -132,7 +133,7 @@ fn init(
     stage2_sectors: u32,
     kernel_sectors: u32,
     stack_start: u32,
-) -> Result<InitializationParameters, Error> {
+) -> error::Result<InitializationParameters> {
     let kernel = load_kernel_from_boot_disk(
         drive_parameters_pointer,
         stage2_sectors,
@@ -181,15 +182,12 @@ fn init(
     })
 }
 
-fn setup_control_registers() -> Result<
-    (
-        ControlRegister0,
-        ControlRegister3,
-        ControlRegister4,
-        ExtendedFeatureEnableRegister,
-    ),
-    Error,
-> {
+fn setup_control_registers() -> error::Result<(
+    ControlRegister0,
+    ControlRegister3,
+    ControlRegister4,
+    ExtendedFeatureEnableRegister,
+)> {
     use control_registers::ControlRegister0Bit::*;
     use control_registers::ControlRegister4Bit::*;
     use control_registers::ExtendedFeatureEnableRegisterBit::*;
@@ -200,12 +198,10 @@ fn setup_control_registers() -> Result<
 
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     #[allow(static_mut_refs)]
-    cr3.set_pml4(unsafe { &PML4 }).map_err(|reason| {
-        Error::new(
-            reason,
-            Context::SettingUpControlRegister("cr3"),
-            Facility::Bootloader,
-        )
+    cr3.set_pml4(unsafe { &PML4 }).map_err(|error| {
+        error
+            .with_context(Context::SettingUpControlRegister("cr3"))
+            .with_facility(Facility::Bootloader)
     })?;
 
     Ok((cr0, cr3, cr4, efer))
@@ -224,7 +220,7 @@ const GDTI_TSS: usize = 5;
 /// # Panics
 /// Panics if the values for the data segment and the size of the gdt::SegmentDescriptor struct
 /// exceed u16 (likely programming errors)
-fn setup_global_descriptor_table() -> Result<(), Error> {
+fn setup_global_descriptor_table() -> error::Result<()> {
     use gdt::SegmentKind::*;
     macro_rules! update_gdt {
         ($gdt:ident[$gdt_index:expr] => $segment_decriptor:expr) => {
@@ -386,16 +382,17 @@ static mut PML4: paging::PML4 = paging::PML4::new();
 static mut PAGE_DIRECTORY_POINTER_TABLE: paging::PageDirectoryPointerTable =
     paging::PageDirectoryPointerTable::new();
 
-fn setup_page_tables() -> Result<(), Error> {
+fn setup_page_tables() -> error::Result<()> {
     let pdpt_ptr = &raw mut PAGE_DIRECTORY_POINTER_TABLE;
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     let pdpt = unsafe { &mut *pdpt_ptr };
 
-    pdpt.entries[0].set_physical_address(
-        core::ptr::null::<u8>().try_into().map_err(|reason| {
-            Error::new(reason, Context::SettingUpPageTable, Facility::Bootloader)
-        })?,
-    );
+    pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().map_err(
+        |err: Error| {
+            err.with_context(Context::SettingUpPageTable)
+                .with_facility(Facility::Bootloader)
+        },
+    )?);
     pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
     let pml4_ptr = &raw mut PML4;
@@ -410,7 +407,7 @@ fn setup_page_tables() -> Result<(), Error> {
 }
 
 #[cfg(target_os = "none")]
-fn load_segments_into_memory(kernel: &elf::File<'static>) -> Result<(), Error> {
+fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
     for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
         program_header.ok().filter(|program_header| {
             matches!(program_header.r#type(), ProgramHeaderEntryType::Load)
@@ -457,10 +454,10 @@ fn load_kernel_from_boot_disk(
     stage2_sectors: u32,
     kernel_sectors: u32,
     stack_start: u32,
-) -> Result<elf::File<'static>, Error> {
-    fn error(fault: Fault) -> Error {
-        Error::new(fault, Context::ReadingKernelFromDisk, Facility::Bootloader)
-    }
+) -> error::Result<elf::File<'static>> {
+    let error = Error::blank()
+        .with_context(Context::ReadingKernelFromDisk)
+        .with_facility(Facility::Bootloader);
 
     // SAFETY: The call to BIOS interrupt 13h with AH=48h returned without error in stage1 if we
     // got to stage2, and the drive_parameters_pointer, passed during stage1 to start, points to a
@@ -468,7 +465,7 @@ fn load_kernel_from_boot_disk(
     let drive_parameters_bytes = unsafe {
         core::ptr::slice_from_raw_parts(drive_parameters_pointer, DRIVE_PARAMETERS_BUFFER_SIZE)
             .as_ref()
-            .ok_or(error(Fault::InvalidDriveParametersPointer(
+            .ok_or(error.with_fault(Fault::InvalidDriveParametersPointer(
                 drive_parameters_pointer,
             )))?
     };
@@ -477,7 +474,7 @@ fn load_kernel_from_boot_disk(
     let drive_parameters =
         edd::DriveParameters::try_from(drive_parameters_bytes).map_err(|err| {
             error::push_to_global_error_chain_no_sync(err);
-            error(Fault::FailedBootDeviceIdentification)
+            error.with_fault(Fault::FailedBootDeviceIdentification)
         })?;
 
     match ata::Device::try_from(drive_parameters) {
@@ -493,32 +490,34 @@ fn load_kernel_from_boot_disk(
                     kernel_size_bytes,
                 )
                 .as_mut()
-                .ok_or(error(Fault::InvalidStackStart(stack_start)))?
+                .ok_or(error.with_fault(Fault::InvalidStackStart(stack_start)))?
             };
 
             // FIXME: if the kernel gets large enough, we might want to read it in multiple
             // operations, or use lba48
             if kernel_sectors > 256 {
-                return Err(error(Fault::TooManySectors(kernel_sectors)));
+                return Err(error.with_fault(Fault::TooManySectors(kernel_sectors)));
             }
             ata_device
                 .read_sectors_lba28_pio(kernel_sectors as u8, stage2_sectors + 1, kernel_bytes)
                 .map_err(|err| {
                     error::push_to_global_error_chain_no_sync(err);
-                    error(Fault::IOError)
+                    error.with_fault(Fault::IOError)
                 })?;
 
             elf::File::try_from(&kernel_bytes[..kernel_size_bytes]).map_err(|err| {
                 error::push_to_global_error_chain_no_sync(err);
-                error(Fault::InvalidElf)
+                error.with_fault(Fault::InvalidElf)
             })
         }
         Err(_drive_parametrs) => {
             error::clear_global_error_chain_no_sync();
-            // TODO: try USB
-            look_for_usb_root_hubs();
+            look_for_usb_root_hubs().map_err(|err| {
+                error::push_to_global_error_chain_no_sync(err);
+                error.with_fault(Fault::IOError)
+            })?;
 
-            Err(error(Fault::UnsupportedBootMedium))
+            todo!()
         }
     }
 }
@@ -527,21 +526,31 @@ fn load_kernel_from_boot_disk(
 #[allow(clippy::missing_panics_doc)]
 // NOTE: Load-bearing assumption: the bootloader was loaded from a USB stick connected to a hub
 // controlle by an EHCI controller
-fn look_for_usb_root_hubs() {
-    for usb_host_controller in pci::EHCIControllers::new() {
-        serial::writeln_no_sync!("{}", &usb_host_controller);
+fn look_for_usb_root_hubs() -> error::Result<()> {
+    for mut usb_host_controller in pci::EHCIControllers::new() {
+        if usb_host_controller
+            .owner()
+            .is_none_or(|owner| matches!(owner, usb::ehci::Owner::Bios))
+            && let Err(error) = usb_host_controller.switch_ownership(usb::ehci::Owner::Os)
+        {
+            serial::log::debug_no_sync!("Warning: Controller failed to switch ownership:\n{error}");
+        }
+        usb_host_controller.reset()?;
         for (i, port) in usb_host_controller.ports().into_iter().enumerate() {
             if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
                 && port.needs_reset()
             {
-                serial::writeln_no_sync!("Port {i} needs reset");
-                usb_host_controller.reset_port(i);
+                serial::log::debug_no_sync!("Port {i} needs reset");
+                let _ = usb_host_controller.reset_port(i).inspect_err(|err| {
+                    serial::log::debug_no_sync!("Warning: Port reset failed: {err}");
+                });
             }
             if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent) {
-                serial::writeln_no_sync!("Port {i} has device present");
+                serial::log::debug_no_sync!("Port {i} has device present");
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(not(target_os = "none"))]

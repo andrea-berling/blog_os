@@ -20,3 +20,5 @@ pub mod timer;
 pub mod tss;
 pub mod usb;
 pub mod vga;
+
+pub const DEBUG: bool = true;

@@ -1,7 +1,5 @@
-use core::arch::asm;
-
 use crate::{
-    error::{Context, Error, Facility, Fault},
+    error::{self, Context, Error, Facility, Fault},
     ioport::Port,
     make_bitmap, timer,
 };
@@ -194,7 +192,7 @@ impl Device {
         status.is_set(ReadyForSendReceive) && !status.is_set(BusyPreparingToSendReceive)
     }
 
-    fn wait_for_readiness(&self, timeout_ns: u64) -> Result<(), Error> {
+    fn wait_for_readiness(&self, timeout_ns: u64) -> error::Result<()> {
         Self::courtesy_delay();
         let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
         while !self.ready_for_command() && !timeout_timer.timeout() {
@@ -206,7 +204,7 @@ impl Device {
         Ok(())
     }
 
-    fn poll_for_reads(&self, timeout_ns: u64) -> Result<(), Error> {
+    fn poll_for_reads(&self, timeout_ns: u64) -> error::Result<()> {
         Self::courtesy_delay();
         let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
         while !self.has_data_to_send() && !timeout_timer.timeout() {
@@ -223,7 +221,7 @@ impl Device {
         sector_count: u8,
         lba_address: u32,
         output_buffer: &mut [u8],
-    ) -> Result<(), Error> {
+    ) -> error::Result<()> {
         if lba_address as u64 >= self.sectors {
             return Err(self.io_error(Fault::InvalidLBAAddress(lba_address.into(), self.sectors)));
         }
@@ -259,13 +257,7 @@ impl Device {
             let n_words = self.sector_size_bytes as usize / size_of::<u16>();
 
             self.data_register()
-                .rep_insw(&mut output_buffer[start..end], n_words as u16)
-                .map_err(|n_words| {
-                    self.io_error(Fault::CantReadIntoBuffer(
-                        (n_words as usize * size_of::<u16>()) as u64,
-                        self.sector_size_bytes as u64,
-                    ))
-                })?;
+                .rep_insw(&mut output_buffer[start..end], n_words as u16)?;
         }
 
         Ok(())

@@ -3,6 +3,11 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 // Source of truth: PCI Local Bus Specification revision 2.2
 use crate::{
+    error::{
+        self, Error,
+        Fault::{self, InvalidPCIMemoryAddressingType},
+        PciDevice, convert_try_read_error,
+    },
     ioport::Port,
     make_bitmap,
     usb::{self, ehci},
@@ -22,9 +27,9 @@ pub enum ConfigAddressRegisterFlag {
 make_bitmap!(new_type: ConfigAddressRegister, underlying_flag_type: ConfigAddressRegisterFlag, repr: u32, nodisplay);
 
 impl ConfigAddressRegister {
-    pub fn set_register_number(&mut self, register_number: u8) {
+    pub fn set_register_offset(&mut self, register_number: u8) {
         self.bits &= !(0x3f << 2);
-        self.bits |= register_number as u32 & 0x3f;
+        self.bits |= register_number as u32 & (0x3f << 2);
     }
 
     pub fn set_function_number(&mut self, function_number: u8) {
@@ -54,38 +59,57 @@ impl ConfigAddressRegister {
         (self.bits >> 16) as u8
     }
 
-    fn read_dword(&self) -> u32 {
+    pub fn read_dword(&mut self) -> u32 {
         let config_address_port = Port::new(CONFIG_ADDRESS);
         let config_data_port = Port::new(CONFIG_DATA);
+        self.set_flag(ConfigAddressRegisterFlag::Enable);
 
         config_address_port.writed(self.bits);
         config_data_port.readd()
     }
 
+    pub fn write_dword(&mut self, dword: u32) {
+        let config_address_port = Port::new(CONFIG_ADDRESS);
+        let config_data_port = Port::new(CONFIG_DATA);
+        self.set_flag(ConfigAddressRegisterFlag::Enable);
+
+        config_address_port.writed(self.bits);
+        config_data_port.writed(dword);
+    }
+
     pub fn dump_configuration_space_header(
         &mut self,
-    ) -> Option<Result<ConfigurationSpaceHeader, &'static str>> {
+    ) -> Option<error::Result<ConfigurationSpaceHeader>> {
         let mut bytes = [0u8; size_of::<ConfigurationSpaceHeader>()];
-        let mut index = 0usize;
-        self.set_register_number(index as u8);
+        let mut offset = 0usize;
+        self.set_register_offset(offset as u8);
         self.read_dword()
             .to_le_bytes()
-            .write_to_prefix(&mut bytes[index..])
+            .write_to_prefix(&mut bytes[offset..])
             .ok()?;
-        index += 4;
+        offset += 4;
         if u16::from_le_bytes([bytes[0], bytes[1]]) == 0xff_ff {
             return None;
         }
-        while index < bytes.len() {
-            self.set_register_number(index as u8);
-            // crate::vga::writeln_no_sync!("{:#x}", self.bits);
+        while offset < bytes.len() {
+            self.set_register_offset(offset as u8);
             self.read_dword()
                 .to_le_bytes()
-                .write_to_prefix(&mut bytes[index..])
+                .write_to_prefix(&mut bytes[offset..])
                 .ok()?;
-            index += 4;
+            offset += 4;
         }
         Some(ConfigurationSpaceHeader::try_from(bytes.as_slice()))
+    }
+}
+
+impl From<ConfigAddressRegister> for PciDevice {
+    fn from(value: ConfigAddressRegister) -> Self {
+        PciDevice::new(
+            value.get_bus_number(),
+            value.get_device_number(),
+            value.get_function_number(),
+        )
     }
 }
 
@@ -491,25 +515,16 @@ pub struct ConfigurationSpaceHeader {
 }
 
 impl TryFrom<&[u8]> for ConfigurationSpaceHeader {
-    type Error = &'static str;
+    type Error = Error;
 
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let configuration_space_header_raw = ConfigurationSpaceHeader::try_read_from_prefix(&bytes)
+    fn try_from(bytes: &[u8]) -> error::Result<Self> {
+        let configuration_space_header_raw = ConfigurationSpaceHeader::try_read_from_prefix(bytes)
             .map(|(result, _rest)| result)
-            .map_err(|_err| "TODO:")?;
-        let _ = HeaderType::try_from(configuration_space_header_raw.header_type & 0x7f).map_err(
-            |err| {
-                panic!("{configuration_space_header_raw:?}",);
-                "TODO header type"
-            },
-        )?;
+            .map_err(convert_try_read_error)?;
+        let _ = HeaderType::try_from(configuration_space_header_raw.header_type & 0x7f)
+            .map_err(|err| Error::blank().with_fault(Fault::InvalidPCIHeaderType(err.number)))?;
 
-        let _ = configuration_space_header_raw
-            .try_get_class()
-            .map_err(|err| {
-                crate::vga::writeln_no_sync!("{err}");
-                "TODO class"
-            })?;
+        let _ = configuration_space_header_raw.try_get_class()?;
         Ok(configuration_space_header_raw)
     }
 }
@@ -523,7 +538,7 @@ impl ConfigurationSpaceHeader {
             .expect("header_type field did not contain a valid header type in its low bits")
     }
 
-    fn try_get_class(&self) -> Result<Class, u32> {
+    fn try_get_class(&self) -> error::Result<Class> {
         if self.base_class == 0x01 && self.subclass == 0x01 {
             return Ok(Class::IDEController);
         }
@@ -534,6 +549,11 @@ impl ConfigurationSpaceHeader {
         if self.base_class == 0x0e && self.subclass == 0x08 {
             return Ok(Class::IntelligentIOController);
         }
+
+        let class = (self.base_class as u32) << 16
+            | ((self.subclass as u32) << 8)
+            | (self.programming_interface as u32);
+        let invalid_class_error = error::Error::blank().with_fault(Fault::InvalidPCIClass(class));
 
         if self.subclass == 0x80 {
             match self.base_class {
@@ -550,19 +570,12 @@ impl ConfigurationSpaceHeader {
                 0x10 => return Ok(Class::OtherEnDecryption),
                 0x11 => return Ok(Class::OtherDataAcquisitionSignalProcessingController),
                 _ => {
-                    //TODO: clean up
-                    return Err((self.base_class as u32) << 16
-                        | ((self.subclass as u32) << 8)
-                        | (self.programming_interface as u32));
+                    return Err(invalid_class_error);
                 }
             }
         }
 
-        ((self.base_class as u32) << 16
-            | ((self.subclass as u32) << 8)
-            | (self.programming_interface as u32))
-            .try_into()
-            .map_err(|err: num_enum::TryFromPrimitiveError<Class>| err.number)
+        class.try_into().map_err(|_| invalid_class_error)
     }
 
     /// # Panics
@@ -774,11 +787,13 @@ impl MemoryBaseAddressRegister {
         (self.bits >> Self::PREFETCHABLE_SHIFT) & Self::PREFETCHABLE_MASK != 0
     }
 
-    pub fn memory_addressing_type(&mut self) -> Result<MemoryBaseAddressRegisterType, u8> {
+    pub fn memory_addressing_type(&mut self) -> error::Result<MemoryBaseAddressRegisterType> {
         (((self.bits >> Self::TYPE_SHIFT) & Self::TYPE_MASK) as u8)
             .try_into()
             .map_err(
-                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| err.number,
+                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| {
+                    error::Error::blank().with_fault(InvalidPCIMemoryAddressingType(err.number))
+                },
             )
     }
 }
@@ -803,12 +818,6 @@ impl From<u32> for BaseAddressRegister {
     }
 }
 
-struct IteratorState {
-    bus_number: u8,
-    device_number: u8,
-    function_number: u8,
-}
-
 #[derive(Default)]
 pub struct EHCIControllers {
     config_addr: ConfigAddressRegister,
@@ -817,6 +826,25 @@ pub struct EHCIControllers {
 impl EHCIControllers {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    fn try_create_ehci_controller(
+        &mut self,
+        config_header: &ConfigurationSpaceHeader,
+        config_addr: ConfigAddressRegister,
+    ) -> Option<ehci::Controller> {
+        match config_header.get_class() {
+            Class::EHCIUsb => Some(usb::ehci::Controller::new(
+                config_header.base_address_register_1() & !0xf,
+                config_addr,
+            )),
+            Class::UHCIUsb
+            | Class::OHCIUsb
+            | Class::GenericUsb
+            | Class::UsbDevice
+            | Class::XHCIUsb => None,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -830,24 +858,17 @@ impl Iterator for EHCIControllers {
             self.config_addr.set_flag(ConfigAddressRegisterFlag::Enable);
             for device_number in self.config_addr.get_device_number()..=MAX_DEVICE_NUMBER as u8 {
                 self.config_addr.set_device_number(device_number);
-                if let Some(config_header) = self.config_addr.dump_configuration_space_header()
-                    && let Ok(config_header) = config_header.as_ref()
+                if let Some(Ok(ref config_header)) =
+                    self.config_addr.dump_configuration_space_header()
                 {
                     if config_header.is_usb() {
-                        match config_header.get_class() {
-                            Class::EHCIUsb => {
-                                // Make sure that on next iteration, we go to the next device
-                                self.config_addr.set_device_number(device_number + 1);
-                                return Some(usb::ehci::Controller::new(
-                                    config_header.base_address_register_1() & !0xf,
-                                ));
-                            }
-                            Class::UHCIUsb
-                            | Class::OHCIUsb
-                            | Class::GenericUsb
-                            | Class::UsbDevice
-                            | Class::XHCIUsb => {}
-                            _ => unreachable!(),
+                        let controller_config_addr = self.config_addr;
+                        // Make sure that on next iteration, we go to the next device
+                        self.config_addr.set_device_number(device_number + 1);
+                        if let Some(value) =
+                            self.try_create_ehci_controller(config_header, controller_config_addr)
+                        {
+                            return Some(value);
                         }
                     }
 
@@ -856,25 +877,18 @@ impl Iterator for EHCIControllers {
                             self.config_addr.get_function_number()..=MAX_FUNCTION_NUMBER as u8
                         {
                             self.config_addr.set_function_number(function);
-                            if let Some(config_header) =
+                            if let Some(Ok(ref config_header)) =
                                 self.config_addr.dump_configuration_space_header()
-                                && let Ok(config_header) = config_header.as_ref()
                                 && config_header.is_usb()
                             {
-                                match config_header.get_class() {
-                                    Class::EHCIUsb => {
-                                        // Make sure that on next iteration, we go to the next function
-                                        self.config_addr.set_device_number(function + 1);
-                                        return Some(usb::ehci::Controller::new(
-                                            config_header.base_address_register_1() & !0xf,
-                                        ));
-                                    }
-                                    Class::UHCIUsb
-                                    | Class::OHCIUsb
-                                    | Class::GenericUsb
-                                    | Class::UsbDevice
-                                    | Class::XHCIUsb => {}
-                                    _ => unreachable!(),
+                                let controller_config_addr = self.config_addr;
+                                // Make sure that on next iteration, we go to the next function
+                                self.config_addr.set_device_number(function + 1);
+                                if let Some(value) = self.try_create_ehci_controller(
+                                    config_header,
+                                    controller_config_addr,
+                                ) {
+                                    return Some(value);
                                 }
                             }
                         }

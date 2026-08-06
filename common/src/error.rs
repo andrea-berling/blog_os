@@ -1,11 +1,41 @@
-use core::cmp::min;
+use core::{
+    cmp::min,
+    fmt::Display,
+    ops::{Index as _, IndexMut as _},
+};
 
 // TODO: sort things in order
 
 use thiserror::Error;
 use zerocopy::{TryFromBytes, TryReadError};
 
-pub const CONTEXT_LENGTH: usize = 16;
+#[derive(Clone, Copy)]
+pub struct Prelude<const N: usize>([u8; N]);
+
+impl<const N: usize> From<&[u8]> for Prelude<N> {
+    fn from(value: &[u8]) -> Self {
+        let mut inner_value = [0; N];
+        let range = ..min(N, value.len());
+        inner_value
+            .index_mut(range)
+            .copy_from_slice(value.index(range));
+        Self(inner_value)
+    }
+}
+
+impl<const N: usize> core::fmt::Debug for Prelude<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<const N: usize> core::ops::Deref for Prelude<N> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Clone, Copy, Error, Debug)]
 pub enum Context {
@@ -29,6 +59,14 @@ pub enum Context {
     SettingUpPageTable,
     #[error("Setting up processor data structures")]
     SettingUpProcessor,
+    #[error("Waiting for Host Controller ownership to switch")]
+    WaitingHostControllerOwnershipSwitch,
+    #[error("Waiting for USB Port reset bit to clear")]
+    WaitingUSBPortResetClear(u8),
+    #[error("Halting EHCI controller")]
+    HaltingEhciController,
+    #[error("Resetting EHCI controller")]
+    ResettingEhciController,
 }
 
 impl Error {
@@ -40,12 +78,16 @@ impl Error {
         }
     }
 
-    pub fn parsing_error(fault: Fault, facility: Facility) -> Self {
-        Self {
-            facility,
-            fault,
-            context: Context::Parsing,
-        }
+    pub fn with_context(self, context: Context) -> Self {
+        Self { context, ..self }
+    }
+
+    pub fn with_facility(self, facility: Facility) -> Self {
+        Self { facility, ..self }
+    }
+
+    pub fn with_fault(self, fault: Fault) -> Self {
+        Self { fault, ..self }
     }
 
     pub const fn blank() -> Self {
@@ -57,6 +99,21 @@ impl Error {
     }
 }
 
+#[macro_export]
+macro_rules! with {
+    (Facility::$($facility:tt)*) => {
+        |err| err.with_facility(Facility::$($facility)*)
+    };
+    (Fault::$($fault:tt)*) => {
+        |err| err.with_fault(Fault::$($fault)*)
+    };
+    (Context::$($context:tt)*) => {
+        |err| err.with_context(Context::$($context)*)
+    };
+}
+
+pub use with;
+
 pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
     let mut context = [0u8; N];
     context[..min(N, context_bytes.len())]
@@ -64,25 +121,25 @@ pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
     context
 }
 
-pub fn try_read_error<U: TryFromBytes>(facility: Facility, err: TryReadError<&[u8], U>) -> Error {
-    let dst_type_prefix = bounded_context(core::any::type_name::<U>().as_bytes());
-    Error::parsing_error(
-        match err {
-            zerocopy::ConvertError::Alignment(_) => {
-                unreachable!()
-            }
-            zerocopy::ConvertError::Size(size_error) => Fault::InvalidSizeForType {
-                size: size_error.into_src().len(),
-                dst_type_prefix,
-            },
-            zerocopy::ConvertError::Validity(validity_error) => Fault::InvalidValueForType {
-                value_prefix: bounded_context(validity_error.into_src()),
-                dst_type_prefix,
-            },
+pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
+    let dst_type = core::any::type_name::<U>().as_bytes();
+    Error::blank().with_fault(match err {
+        zerocopy::ConvertError::Alignment(_) => {
+            unreachable!()
+        }
+        zerocopy::ConvertError::Size(size_error) => Fault::InvalidSizeForType {
+            size: size_error.into_src().len(),
+            dst_type_name: dst_type.into(),
         },
-        facility,
-    )
+        zerocopy::ConvertError::Validity(validity_error) => Fault::InvalidValueForType {
+            value: validity_error.into_src().into(),
+            dst_type_name: dst_type.into(),
+        },
+    })
 }
+
+pub const VALUE_LENGTH_BYTES: usize = 8;
+pub const TYPE_NAME_LENGTH_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, Error)]
 pub enum Fault {
@@ -92,20 +149,20 @@ pub enum Fault {
     InvalidValueForField(&'static str),
     #[error("Not supported endianness (Big Endian)")]
     UnsupportedEndianness,
-    #[error("Invalid value {value_prefix:#x?} for type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Invalid value for type {dst_type:?}. First {VALUE_LENGTH_BYTES} bytes: {value:#x?}", dst_type = core::str::from_utf8(dst_type_name))]
     InvalidValueForType {
-        value_prefix: [u8; CONTEXT_LENGTH],
-        dst_type_prefix: [u8; CONTEXT_LENGTH],
+        value: Prelude<VALUE_LENGTH_BYTES>,
+        dst_type_name: Prelude<TYPE_NAME_LENGTH_BYTES>,
     },
-    #[error("Incorrect size {size} for destination type {dst_type:?}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Incorrect size for destination type {dst_type:?}: {size}", dst_type = core::str::from_utf8(dst_type_name))]
     InvalidSizeForType {
         size: usize,
-        dst_type_prefix: [u8; CONTEXT_LENGTH],
+        dst_type_name: Prelude<TYPE_NAME_LENGTH_BYTES>,
     },
-    #[error("Incorrect address {address:#x} for destination type {dst_type:?} with alignment {alignment}", dst_type = core::str::from_utf8(dst_type_prefix))]
+    #[error("Incorrect address for destination type {dst_type:?}: {address:#x} with alignment {alignment}", dst_type = core::str::from_utf8(dst_type_name))]
     InvalidAddressForType {
         address: u64,
-        dst_type_prefix: [u8; CONTEXT_LENGTH],
+        dst_type_name: Prelude<TYPE_NAME_LENGTH_BYTES>,
         alignment: usize,
     },
     #[error("Not enough bytes for '{0}'")]
@@ -114,6 +171,8 @@ pub enum Fault {
     InvalidLBAAddress(u64, u64),
     #[error("Can't read into the given buffer: needed '{1}' bytes, only have {0}")]
     CantReadIntoBuffer(u64, u64),
+    #[error("Wrong buffer size:  '{1}' bytes, only have {0}")]
+    WrongBufferSize { expected: u64, actual: u64 },
     #[error("Timeout ({0} ns)")]
     Timeout(u64),
     #[error("Invalid segment parameters: virtual address: {virtual_address}, size: {size}")]
@@ -128,6 +187,12 @@ pub enum Fault {
     UnsupportedFeature(Feature),
     #[error("Too many sectors: {0}")]
     TooManySectors(u32),
+    #[error("FDTB is not available")]
+    NoFDTBAvailable,
+    #[error("Device path information is not available")]
+    NoDevicePathInformationAvailable,
+    #[error("Not an ATA device")]
+    NotAnATADevice,
     #[error("Hanging ATA device")]
     HangingAtaDevice,
     #[error("ATA device not ready for commands")]
@@ -144,12 +209,53 @@ pub enum Fault {
     InvalidStackStart(u32),
     #[error("Couldn't identify boot device")]
     FailedBootDeviceIdentification,
+    #[error("Invalid PCI Configuration Space Header")]
+    InvalidPCIConfigSpaceHeader,
+    #[error("Invalid PCI Header Type")]
+    InvalidPCIHeaderType(u8),
+    #[error("Invalid PCI Class: {0:#x}")]
+    InvalidPCIClass(u32),
+    #[error("Invalid PCI Memory Addressing Type: {0:#x}")]
+    InvalidPCIMemoryAddressingType(u8),
+    #[error("USB Legacy Support Extended Capability not available")]
+    NoUSBLEGSUP,
+    #[error("EHCI Extended Capabilities Pointer not available")]
+    NoEECP,
+    #[error("EHCI Controller is not halted")]
+    EhciControllerNotHalted,
 }
 
 #[derive(Debug, Error, Clone, Copy)]
 pub enum Feature {
     #[error("1GB pages")]
     _1GBPages,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PciDevice {
+    bus_number: u8,
+    device_number: u8,
+    function_number: u8,
+}
+
+impl PciDevice {
+    pub fn new(bus_number: u8, device_number: u8, function_number: u8) -> Self {
+        Self {
+            bus_number,
+            device_number,
+            function_number,
+        }
+    }
+}
+
+impl Display for PciDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:02x}:{:02x}.{}",
+            self.bus_number, self.device_number, self.function_number
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -186,6 +292,14 @@ pub enum Facility {
     // Bootloader
     #[error("Bootloader")]
     Bootloader,
+
+    // PCI
+    #[error("PCI device: {0}")]
+    PciDevice(PciDevice),
+
+    // PCI
+    #[error("EHCI controller: {0}")]
+    EhciController(PciDevice),
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -195,6 +309,8 @@ pub struct Error {
     context: Context,   // what were you doing?
     facility: Facility, // where did it happen?
 }
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct ErrorChain<const N: usize> {

@@ -4,10 +4,7 @@ pub mod header;
 pub mod program_header;
 pub mod section;
 
-use crate::error::{Error, Facility, Fault};
-
-type Halfword = u16;
-type Word = u32;
+use crate::error::{self, Context, Error, Facility, Fault};
 
 pub struct File<'a> {
     bytes: &'a [u8],
@@ -48,12 +45,10 @@ impl<'a> File<'a> {
     pub fn get_section_by_index(
         &self,
         index: usize,
-    ) -> Option<Result<section::Section<'_>, Error>> {
+    ) -> Option<error::Result<section::Section<'_>>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
-
-        let error_reporting_facility = Facility::ElfSectionHeaderEntry(index as Halfword);
 
         match section::HeaderEntry::try_from_bytes(
             self.bytes.get(
@@ -61,7 +56,6 @@ impl<'a> File<'a> {
                     + index * self.header.section_header_entry_size() as usize)..,
             )?,
             self.header.class(),
-            error_reporting_facility,
         ) {
             Ok(section_entry_header) => {
                 let offset = section_entry_header.offset() as usize;
@@ -72,7 +66,9 @@ impl<'a> File<'a> {
                     ),
                 )
             }
-            Err(err) => Some(Err(err)),
+            Err(err) => Some(Err(
+                err.with_facility(Facility::ElfSectionHeaderEntry(index as u16))
+            )),
         }
     }
 
@@ -91,7 +87,11 @@ impl<'a> File<'a> {
 impl<'a> TryFrom<&'a [u8]> for File<'a> {
     type Error = Error;
 
-    fn try_from(bytes: &'a [u8]) -> core::result::Result<Self, Self::Error> {
+    fn try_from(bytes: &'a [u8]) -> error::Result<Self> {
+        let error = Error::blank()
+            .with_context(Context::Parsing)
+            .with_facility(Facility::ElfFile);
+
         let result = Self {
             bytes,
             header: bytes.try_into()?,
@@ -103,10 +103,7 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.section_header_entry_size()
                         * result.header.section_header_entries()) as u64) as usize
         {
-            return Err(Error::parsing_error(
-                Fault::NotEnoughBytesFor("section header"),
-                Facility::ElfFile,
-            ));
+            return Err(error.with_fault(Fault::NotEnoughBytesFor("section header")));
         }
 
         if result.bytes.len() < result.header.program_header_offset() as usize
@@ -115,10 +112,7 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.program_header_entry_size()
                         * result.header.program_header_entries()) as u64) as usize
         {
-            return Err(Error::parsing_error(
-                Fault::NotEnoughBytesFor("program header"),
-                Facility::ElfFile,
-            ));
+            return Err(error.with_fault(Fault::NotEnoughBytesFor("program header")));
         }
 
         Ok(Self {
@@ -127,5 +121,3 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
         })
     }
 }
-
-
