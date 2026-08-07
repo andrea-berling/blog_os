@@ -118,4 +118,38 @@ impl LowPrecisionTimer {
         self.ticks = self.original_ticks;
         self.started = false;
     }
+
+    pub fn wait_for_ms(timeout_ms: u64) {
+        let mut timer = Self::new(core::time::Duration::from_millis(timeout_ms).as_nanos() as u64);
+        while !timer.timeout() {
+            timer.update();
+        }
+    }
 }
+
+#[macro_export]
+macro_rules! bounded_wait {
+    ($until_check:expr, wait_for_ms: $duration_ms:expr) => {
+        $crate::timer::bounded_wait!(
+            $until_check,
+            wait_for_ms : $duration_ms,
+            final_check : $until_check
+        )
+    };
+
+    ($until_check:expr, wait_for_ms : $duration_ms:expr, final_check : $timeout_check:expr) => {{
+        let timeout_ms = ::core::time::Duration::from_millis($duration_ms);
+        let mut timeout_timer = $crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
+        while !($until_check) && !timeout_timer.timeout() {
+            timeout_timer.update();
+        }
+        if timeout_timer.timeout() && !($timeout_check) {
+            Err($crate::error::Error::blank()
+                .with_fault($crate::error::Fault::Timeout(timeout_ms.as_nanos() as u64)))
+        } else {
+            Ok(())
+        }
+    }};
+}
+
+pub use bounded_wait;

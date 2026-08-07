@@ -97,6 +97,10 @@ impl Error {
             facility: Facility::None,
         }
     }
+
+    pub fn fault(&self) -> Fault {
+        self.fault
+    }
 }
 
 #[macro_export]
@@ -171,7 +175,7 @@ pub enum Fault {
     InvalidLBAAddress(u64, u64),
     #[error("Can't read into the given buffer: needed '{1}' bytes, only have {0}")]
     CantReadIntoBuffer(u64, u64),
-    #[error("Wrong buffer size:  '{1}' bytes, only have {0}")]
+    #[error("Wrong buffer size:  expected '{expected}' bytes, only have {actual}")]
     WrongBufferSize { expected: u64, actual: u64 },
     #[error("Timeout ({0} ns)")]
     Timeout(u64),

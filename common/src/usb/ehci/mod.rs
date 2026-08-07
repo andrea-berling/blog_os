@@ -6,7 +6,7 @@ use crate::{
     error::{self, Context, Error, Facility, Fault},
     make_bitmap, mmio,
     pci::ConfigAddressRegister,
-    timer::LowPrecisionTimer,
+    timer::{self, LowPrecisionTimer},
 };
 
 pub mod queue_head;
@@ -151,6 +151,26 @@ impl Display for Owner {
     }
 }
 
+struct USBCommandRegisterMMIO(mmio::Volatile);
+
+impl USBCommandRegisterMMIO {
+    pub fn get(&self) -> USBCommandRegister {
+        self.0.readd().into()
+    }
+
+    pub fn set(&mut self, usb_command: USBCommandRegister) {
+        self.0.writed(usb_command.into())
+    }
+}
+
+struct USBStatusRegisterMMIO(mmio::Volatile);
+
+impl USBStatusRegisterMMIO {
+    pub fn get(&self) -> USBStatusRegister {
+        self.0.readd().into()
+    }
+}
+
 pub struct Controller {
     base_address: u32,
     capability_register_length: u8,
@@ -158,8 +178,8 @@ pub struct Controller {
     eecp_pci_offset: Option<u8>,
     pci_config_addr: ConfigAddressRegister,
     has_64_bit_addressing_capability: bool,
-    usb_command_register: mmio::Volatile,
-    usb_status_register: mmio::Volatile,
+    usb_command_register: USBCommandRegisterMMIO,
+    usb_status_register: USBStatusRegisterMMIO,
     owner: Option<Owner>,
     ports: Ports<'static>,
 }
@@ -199,8 +219,8 @@ impl Controller {
             has_64_bit_addressing_capability,
             pci_config_addr,
             capability_register_length,
-            usb_command_register,
-            usb_status_register,
+            usb_command_register: USBCommandRegisterMMIO(usb_command_register),
+            usb_status_register: USBStatusRegisterMMIO(usb_status_register),
             owner: None,
         };
         Self {
@@ -256,18 +276,12 @@ impl Controller {
                 usb_legsup.clear_flag(USBLegacySupportExtendedCapabilityFlag::BiosOwned);
                 self.pci_config_addr.set_register_offset(eecp_pci_offset);
                 self.pci_config_addr.write_dword(usb_legsup.into());
-                // TODO: make macro out of this
-                let timeout_ms = Duration::from_millis(100);
-                let mut timeout_timer =
-                    crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
-                while !matches!(self.owner(), Some(Owner::Os)) && !timeout_timer.timeout() {
-                    timeout_timer.update();
-                }
-                if timeout_timer.timeout() && !matches!(self.owner(), Some(Owner::Os)) {
-                    return Err(error
-                        .with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64))
-                        .with_context(Context::WaitingHostControllerOwnershipSwitch));
-                }
+                timer::bounded_wait!(matches!(self.read_owner_from_usblegsup(), Some(Owner::Os)), wait_for_ms: 100)
+                    .map_err(|err| {
+                        error
+                            .with_context(Context::WaitingHostControllerOwnershipSwitch)
+                            .with_fault(err.fault())
+                    })?;
                 self.owner = Some(owner);
                 Ok(())
             }
@@ -296,28 +310,17 @@ impl Controller {
         let error = Error::blank()
             .with_facility(Facility::EhciController(self.pci_config_addr.into()))
             .with_context(Context::HaltingEhciController);
-        let usb_status: USBStatusRegister = self.usb_status_register.readd().into();
+        let usb_status: USBStatusRegister = self.usb_status_register.get();
         if !usb_status.is_set(USBStatusRegisterFlag::HostControllerHalted) {
-            let mut usb_command_register: USBCommandRegister =
-                self.usb_command_register.readd().into();
+            let mut usb_command_register: USBCommandRegister = self.usb_command_register.get();
             usb_command_register.clear_flag(USBCommandRegisterFlag::Run);
-            self.usb_status_register.writed(usb_command_register.into());
+            self.usb_command_register.set(usb_command_register);
 
-            let timeout_ms = Duration::from_millis(100);
-            let mut timeout_timer =
-                crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
-            while USBCommandRegister::from(self.usb_command_register.readd())
-                .is_set(USBCommandRegisterFlag::HostControllerReset)
-                && !timeout_timer.timeout()
-            {
-                timeout_timer.update();
-            }
-            if timeout_timer.timeout()
-                && !USBStatusRegister::from(self.usb_status_register.readd())
-                    .is_set(USBStatusRegisterFlag::HostControllerHalted)
-            {
-                return Err(error.with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64)));
-            }
+            timer::bounded_wait!(self.usb_status_register.get().is_set(USBStatusRegisterFlag::HostControllerHalted), wait_for_ms: 100)
+                    .map_err(|err| {
+                        error
+                            .with_fault(err.fault())
+                    })?;
         }
         Ok(())
     }
@@ -330,23 +333,11 @@ impl Controller {
 
         let usb_command_register: USBCommandRegister =
             USBCommandRegisterFlag::HostControllerReset.into();
-        self.usb_command_register
-            .writed(usb_command_register.into());
+        self.usb_command_register.set(usb_command_register);
 
-        let timeout_ms = Duration::from_millis(100);
-        let mut timeout_timer = crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
-        while USBCommandRegister::from(self.usb_command_register.readd())
-            .is_set(USBCommandRegisterFlag::HostControllerReset)
-            && !timeout_timer.timeout()
-        {
-            timeout_timer.update();
-        }
-        if timeout_timer.timeout()
-            && !USBCommandRegister::from(self.usb_command_register.readd())
-                .is_set(USBCommandRegisterFlag::HostControllerReset)
-        {
-            return Err(error.with_fault(Fault::Timeout(timeout_ms.as_nanos() as u64)));
-        }
+        timer::bounded_wait!(!self.usb_command_register.get().is_set(USBCommandRegisterFlag::HostControllerReset), wait_for_ms: 100)
+        .map_err(|err| error.with_fault(err.fault()))?;
+
         Ok(())
     }
 
@@ -359,12 +350,11 @@ impl Controller {
         port.set_flag(PortStatusAndControlRegisterFlag::Reset);
         port.clear_flag(PortStatusAndControlRegisterFlag::Enabled);
         self.ports().set(index, port);
-        let mut timer = LowPrecisionTimer::new(Duration::from_millis(50).as_nanos() as u64);
-        while !timer.timeout() {
-            timer.update();
-        }
+        LowPrecisionTimer::wait_for_ms(50);
         port.clear_flag(PortStatusAndControlRegisterFlag::Reset);
         self.ports().set(index, port);
+        // NOTE: code below uses the LowPrecisionTimer directly due to the while let statement,
+        // which has no case in the macro (and is not worth generalising the macro for)
         let clear_reset_timeout_ms = 2;
         let mut timer =
             LowPrecisionTimer::new(Duration::from_millis(clear_reset_timeout_ms).as_nanos() as u64);

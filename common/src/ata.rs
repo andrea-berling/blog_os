@@ -192,28 +192,19 @@ impl Device {
         status.is_set(ReadyForSendReceive) && !status.is_set(BusyPreparingToSendReceive)
     }
 
-    fn wait_for_readiness(&self, timeout_ns: u64) -> error::Result<()> {
+    fn wait_for_readiness(&self, timeout_ms: u64) -> error::Result<()> {
         Self::courtesy_delay();
-        let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
-        while !self.ready_for_command() && !timeout_timer.timeout() {
-            timeout_timer.update();
-        }
-        if timeout_timer.timeout() && !self.ready_for_command() {
-            return Err(self.io_error(Fault::Timeout(timeout_ns)));
-        }
-        Ok(())
+        timer::bounded_wait!(self.ready_for_command(), wait_for_ms: timeout_ms)
+            .map_err(error::with!(Context::Io))
+            .map_err(error::with!(Facility::AtaDevice(self.io_port_base_address)))
     }
 
-    fn poll_for_reads(&self, timeout_ns: u64) -> error::Result<()> {
+    fn poll_for_reads(&self, timeout_ms: u64) -> error::Result<()> {
         Self::courtesy_delay();
-        let mut timeout_timer = timer::LowPrecisionTimer::new(timeout_ns);
-        while !self.has_data_to_send() && !timeout_timer.timeout() {
-            timeout_timer.update();
-        }
-        if timeout_timer.timeout() && !self.has_data_to_send() {
-            return Err(self.io_error(Fault::Timeout(timeout_ns)));
-        }
-        Ok(())
+
+        timer::bounded_wait!(self.has_data_to_send(), wait_for_ms: timeout_ms)
+            .map_err(error::with!(Context::Io))
+            .map_err(error::with!(Facility::AtaDevice(self.io_port_base_address)))
     }
 
     pub fn read_sectors_lba28_pio(
@@ -246,11 +237,11 @@ impl Device {
         self.lba_mid_register().writeb((lba_address >> 8) as u8);
         self.lba_high_register().writeb((lba_address >> 16) as u8);
 
-        self.wait_for_readiness(1_000_000);
+        self.wait_for_readiness(1)?;
         self.command_register().writeb(Command::ReadSectors as u8);
 
         for i in 0..sector_count {
-            self.poll_for_reads(1_000_000)?;
+            self.poll_for_reads(1)?;
 
             let start = i as usize * self.sector_size_bytes as usize;
             let end = start + (self.sector_size_bytes as usize);
