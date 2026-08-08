@@ -3,6 +3,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 // Source of truth: PCI Local Bus Specification revision 2.2
 use crate::{
+    bits,
     error::{
         self, Error,
         Fault::{self, InvalidPCIMemoryAddressingType},
@@ -33,30 +34,27 @@ impl ConfigAddressRegister {
     }
 
     pub fn set_function_number(&mut self, function_number: u8) {
-        self.bits &= !(0x7 << 8);
-        self.bits |= (function_number as u32 & 0x7) << 8;
+        bits::set_bits!(bits_expr: self.bits, value: function_number, n_bits: 3, starts_at_bit: 8, bits_expr_ty: u32);
     }
 
     pub fn set_device_number(&mut self, device_number: u8) {
-        self.bits &= !(0x1f << 11);
-        self.bits |= (device_number as u32 & 0x1f) << 11;
+        bits::set_bits!(bits_expr: self.bits, value: device_number, n_bits: 5, starts_at_bit: 11, bits_expr_ty: u32);
     }
 
     pub fn set_bus_number(&mut self, bus_number: u8) {
-        self.bits &= !(0xff << 16);
-        self.bits |= (bus_number as u32) << 16;
+        bits::set_bits!(bits_expr: self.bits, value: bus_number, n_bits: 8, starts_at_bit: 16, bits_expr_ty: u32);
     }
 
     pub fn get_function_number(&self) -> u8 {
-        (self.bits >> 8) as u8 & 0x7
+        bits::get_bits!(bits_expr: self.bits, n_bits: 3, starts_at_bit: 8, return_ty: u8)
     }
 
     pub fn get_device_number(&self) -> u8 {
-        (self.bits >> 11) as u8 & 0x1f
+        bits::get_bits!(bits_expr: self.bits, n_bits: 5, starts_at_bit: 11, return_ty: u8)
     }
 
     pub fn get_bus_number(&self) -> u8 {
-        (self.bits >> 16) as u8
+        bits::get_bits!(bits_expr: self.bits, n_bits: 8, starts_at_bit: 16, return_ty: u8)
     }
 
     pub fn read_dword(&mut self) -> u32 {
@@ -760,8 +758,7 @@ make_bitmap!(new_type: DeviceStatus, underlying_flag_type: DeviceStatusFlag, rep
 
 impl DeviceStatus {
     pub fn set_devsel_timing(&mut self, devsel_timing: DevSelTiming) {
-        self.bits &= !(0x3 << 9);
-        self.bits |= (devsel_timing as u16) << 9;
+        bits::set_bits!(bits_expr: self.bits, value: devsel_timing, n_bits: 2, starts_at_bit: 9, bits_expr_ty: u16);
     }
 }
 

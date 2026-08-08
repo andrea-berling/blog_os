@@ -3,6 +3,7 @@ use core::{fmt::Display, time::Duration};
 use num_enum::TryFromPrimitive;
 
 use crate::{
+    bits,
     error::{self, Context, Error, Facility, Fault},
     make_bitmap, mmio,
     pci::ConfigAddressRegister,
@@ -42,19 +43,19 @@ make_bitmap!(new_type: HostControllerStructuralParameters, underlying_flag_type:
 
 impl HostControllerStructuralParameters {
     pub fn n_ports(&self) -> u8 {
-        self.bits as u8 & 0xf
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 0, return_ty: u8)
     }
 
     pub fn n_ports_per_companion_controller(&self) -> u8 {
-        (self.bits >> 8) as u8 & 0xf
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 8, return_ty: u8)
     }
 
     pub fn n_companion_controllers(&self) -> u8 {
-        (self.bits >> 12) as u8 & 0xf
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 12, return_ty: u8)
     }
 
     pub fn debug_port_number(&self) -> u8 {
-        (self.bits >> 20) as u8 & 0xf
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 20, return_ty: u8)
     }
 }
 
@@ -535,7 +536,7 @@ impl PortStatusAndControlRegister {
     /// # Panics
     /// Never
     pub fn port_indicator_status(&self) -> PortIndicatorStatus {
-        ((self.bits >> 14) as u8 & 0b11)
+        bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 14, return_ty: u8)
             .try_into()
             .expect("unreachable")
     }
@@ -543,14 +544,14 @@ impl PortStatusAndControlRegister {
     /// # Panics
     /// If the test control bits have a value > 0b1001
     pub fn port_test_control(&self) -> PortTestControl {
-        ((self.bits >> 16) as u8 & 0xf)
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 16, return_ty: u8)
             .try_into()
             .expect("unexpected value for port test control")
     }
 
     // NOTE: only meaningful is PortPowerControlSwitchIsOn (bit 12) is 1
     pub fn needs_reset(&self) -> bool {
-        let line_status = (self.bits >> 10) & 0b11;
+        let line_status = bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
         !self.is_set(PortStatusAndControlRegisterFlag::Enabled)
             && self.is_set(PortStatusAndControlRegisterFlag::DevicePresent)
             && line_status != 0b10
@@ -576,7 +577,7 @@ impl core::fmt::Display for PortStatusAndControlRegister {
             }
         }
         writeln!(f)?;
-        let line_status = (self.bits >> 10) & 0b11;
+        let line_status = bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
         writeln!(
             f,
             "Line status: {line_status:#b} ({interpretation})",

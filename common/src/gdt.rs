@@ -2,19 +2,17 @@ use core::mem::size_of;
 
 use num_enum::TryFromPrimitive;
 
-use crate::{make_bitmap, protection::PrivilegeLevel, tss};
+use crate::{bits, make_bitmap, protection::PrivilegeLevel, tss};
 
 macro_rules! impl_descriptor_ops {
     ($descriptor_type:ty) => {
         impl $descriptor_type {
             pub fn set_limit_hi(&mut self, limit_hi: u8) {
-                self.bits &= !0x0f_00;
-                self.bits |= (limit_hi as u16 & 0x0f) << 8;
+                $crate::bits::set_bits!(bits_expr: self.bits, value: limit_hi, n_bits: 4, starts_at_bit: 8, bits_expr_ty: u16);
             }
 
             pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-                self.bits &= !0x60_00;
-                self.bits |= (privilege_level as u16) << 12;
+                $crate::bits::set_bits!(bits_expr: self.bits, value: privilege_level, n_bits: 2, starts_at_bit: 12, bits_expr_ty: u16);
             }
         }
     };
@@ -347,18 +345,15 @@ impl SegmentDescriptor {
     }
 
     fn set_tss(&mut self) {
-        self.flags.0 &= !0x1f;
-        self.flags.0 |= 0x09;
+        bits::set_bits!(bits_expr: self.flags.0, value: 0b01001, n_bits: 5, starts_at_bit: 0, bits_expr_ty: u16);
     }
 
     fn set_code(&mut self) {
-        self.flags.0 &= !0b11000;
-        self.flags.0 |= (SegmentType::Code as u16) << 3;
+        bits::set_bits!(bits_expr: self.flags.0, value: SegmentType::Code, n_bits: 2, starts_at_bit: 3, bits_expr_ty: u16);
     }
 
     fn set_data(&mut self) {
-        self.flags.0 &= !0b11000;
-        self.flags.0 |= (SegmentType::Data as u16) << 3;
+        bits::set_bits!(bits_expr: self.flags.0, value: SegmentType::Data, n_bits: 2, starts_at_bit: 3, bits_expr_ty: u16);
     }
 
     fn set_limit(&mut self, limit: u32) {

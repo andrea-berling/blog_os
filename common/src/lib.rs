@@ -4,6 +4,7 @@
 #![deny(clippy::unwrap_used)]
 #![no_std]
 pub mod ata;
+pub mod bits;
 pub mod control_registers;
 pub mod elf;
 pub mod error;

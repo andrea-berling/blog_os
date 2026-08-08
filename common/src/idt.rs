@@ -1,6 +1,6 @@
 use core::mem::transmute;
 
-use crate::{make_bitmap, protection::PrivilegeLevel};
+use crate::{bits, make_bitmap, protection::PrivilegeLevel};
 
 #[repr(C, packed)]
 #[derive(Debug)]
@@ -76,8 +76,7 @@ make_bitmap!(new_type: GateDescriptorFlags, underlying_flag_type: GateDescriptor
 
 impl GateDescriptorFlags {
     pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-        self.bits &= !0x60_00;
-        self.bits |= (privilege_level as u16) << 12;
+        bits::set_bits!(bits_expr: self.bits, value: privilege_level, n_bits: 2, starts_at_bit: 12, bits_expr_ty: u16);
     }
 }
 
