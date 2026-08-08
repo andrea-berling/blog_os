@@ -520,7 +520,7 @@ impl TryFrom<&[u8]> for ConfigurationSpaceHeader {
             .map(|(result, _rest)| result)
             .map_err(convert_try_read_error)?;
         let _ = HeaderType::try_from(configuration_space_header_raw.header_type & 0x7f)
-            .map_err(|err| Error::blank().with_fault(Fault::InvalidPCIHeaderType(err.number)))?;
+            .map_err(|err| -> error::Error { Fault::InvalidPCIHeaderType(err.number).into() })?;
 
         let _ = configuration_space_header_raw.try_get_class()?;
         Ok(configuration_space_header_raw)
@@ -551,7 +551,7 @@ impl ConfigurationSpaceHeader {
         let class = (self.base_class as u32) << 16
             | ((self.subclass as u32) << 8)
             | (self.programming_interface as u32);
-        let invalid_class_error = error::Error::blank().with_fault(Fault::InvalidPCIClass(class));
+        let invalid_class_error: error::Error = Fault::InvalidPCIClass(class).into();
 
         if self.subclass == 0x80 {
             match self.base_class {
@@ -788,8 +788,8 @@ impl MemoryBaseAddressRegister {
         (((self.bits >> Self::TYPE_SHIFT) & Self::TYPE_MASK) as u8)
             .try_into()
             .map_err(
-                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| {
-                    error::Error::blank().with_fault(InvalidPCIMemoryAddressingType(err.number))
+                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| -> error::Error {
+                    InvalidPCIMemoryAddressingType(err.number).into()
                 },
             )
     }

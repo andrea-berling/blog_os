@@ -127,7 +127,7 @@ pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
 
 pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
     let dst_type = core::any::type_name::<U>().as_bytes();
-    Error::blank().with_fault(match err {
+    match err {
         zerocopy::ConvertError::Alignment(_) => {
             unreachable!()
         }
@@ -139,7 +139,8 @@ pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> E
             value: validity_error.into_src().into(),
             dst_type_name: dst_type.into(),
         },
-    })
+    }
+    .into()
 }
 
 pub const VALUE_LENGTH_BYTES: usize = 8;
@@ -227,6 +228,10 @@ pub enum Fault {
     NoEECP,
     #[error("EHCI Controller is not halted")]
     EhciControllerNotHalted,
+    #[error("Invalid USB Address: {0:#x}")]
+    InvalidUSBAddress(u8),
+    #[error("Invalid Max Packet length: {0}")]
+    InvalidUSBMaxPacketLength(u16),
 }
 
 #[derive(Debug, Error, Clone, Copy)]
@@ -312,6 +317,24 @@ pub struct Error {
     fault: Fault,       // what happened?
     context: Context,   // what were you doing?
     facility: Facility, // where did it happen?
+}
+
+impl From<Fault> for Error {
+    fn from(fault: Fault) -> Self {
+        Error::blank().with_fault(fault)
+    }
+}
+
+impl From<Facility> for Error {
+    fn from(facility: Facility) -> Self {
+        Error::blank().with_facility(facility)
+    }
+}
+
+impl From<Context> for Error {
+    fn from(context: Context) -> Self {
+        Error::blank().with_context(context)
+    }
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

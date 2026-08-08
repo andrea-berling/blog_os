@@ -262,8 +262,7 @@ impl Controller {
     }
 
     pub fn switch_ownership(&mut self, owner: Owner) -> error::Result<()> {
-        let error =
-            Error::blank().with_facility(Facility::EhciController(self.pci_config_addr.into()));
+        let error: Error = Facility::EhciController(self.pci_config_addr.into()).into();
         match owner {
             Owner::Bios => todo!(),
             Owner::Os => {
@@ -366,7 +365,10 @@ impl Controller {
             timer.update();
         }
 
-        if timer.timeout() {
+        if let port = self.ports().get(index)
+            && !port.is_set(PortStatusAndControlRegisterFlag::Enabled)
+            && timer.timeout()
+        {
             return Err(Error::new(
                 Fault::Timeout(clear_reset_timeout_ms),
                 Context::WaitingUSBPortResetClear(index as u8),

@@ -148,9 +148,7 @@ impl TryFrom<*const u8> for _1GPage {
 
     fn try_from(bytes: *const u8) -> error::Result<Self> {
         if !supports_1gb_pages() {
-            return Err(
-                error::Error::blank().with_fault(Fault::UnsupportedFeature(Feature::_1GBPages))
-            );
+            return Err(Fault::UnsupportedFeature(Feature::_1GBPages).into());
         }
         Ok(Self(bytes))
     }

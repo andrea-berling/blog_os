@@ -2,7 +2,7 @@ use core::arch::asm;
 
 // https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf
 use crate::{
-    error::{self, Error, Fault},
+    error::{self, Fault},
     make_bitmap, paging,
 };
 
@@ -38,11 +38,12 @@ impl ControlRegister3 {
     pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> error::Result<()> {
         let address = pml4 as *const _ as u64;
         if !address.is_multiple_of(0x1000) {
-            return Err(Error::blank().with_fault(Fault::InvalidAddressForType {
+            return Err(Fault::InvalidAddressForType {
                 address,
                 dst_type_name: core::any::type_name::<paging::PML4>().as_bytes().into(),
                 alignment: 0x1000,
-            }));
+            }
+            .into());
         }
         self.bits = address;
         Ok(())

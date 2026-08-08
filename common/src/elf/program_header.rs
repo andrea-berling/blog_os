@@ -75,7 +75,7 @@ pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
     pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
-        let error = Error::blank().with_context(Context::Parsing);
+        let error: Error = Context::Parsing.into();
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
                 .map_err(convert_try_read_error)

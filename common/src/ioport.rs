@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::error::{self, Error};
+use crate::error;
 
 pub struct Port {
     port_number: u16,
@@ -79,12 +79,11 @@ impl Port {
 
     pub fn rep_insw(&self, output_buffer: &mut [u8], n_words: u16) -> error::Result<()> {
         if output_buffer.len() / size_of::<u16>() != n_words as usize {
-            return Err(
-                Error::blank().with_fault(crate::error::Fault::WrongBufferSize {
-                    expected: n_words as u64 * size_of::<u16>() as u64,
-                    actual: output_buffer.len() as u64,
-                }),
-            );
+            return Err(error::Fault::WrongBufferSize {
+                expected: n_words as u64 * size_of::<u16>() as u64,
+                actual: output_buffer.len() as u64,
+            }
+            .into());
         }
         // SAFETY: It is assumed that the user initialised this port with a valid port number
         unsafe {
