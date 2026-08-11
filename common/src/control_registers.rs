@@ -89,14 +89,14 @@ pub enum Msr {
     Efer(ExtendedFeatureEnableRegister) = 0xC000_0080,
 }
 
-pub fn wrmsr(msr: &Msr) {
+pub fn wrmsr(msr: Msr) {
     // SAFETY: Msr has a primitive representation which allows pointer casting to retrieve the
     // discriminant
-    let register_index = unsafe { *(msr as *const Msr as *const u32) };
+    let register_index = unsafe { *(&msr as *const Msr as *const u32) };
 
     let (low, high) = match msr {
         Msr::Efer(extended_feature_enable_register) => {
-            let bits = u64::from(*extended_feature_enable_register);
+            let bits = u64::from(extended_feature_enable_register);
             (bits as u32, (bits >> 32) as u32)
         }
     };

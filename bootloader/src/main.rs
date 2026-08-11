@@ -91,7 +91,7 @@ pub extern "cdecl" fn start(
         );
     }
 
-    wrmsr(&Msr::Efer(initialization_parameters.efer));
+    wrmsr(Msr::Efer(initialization_parameters.efer));
 
     // SAFETY: Cr0 was set to enable paging and protected mode
     // The GDT was set up by setup_global_descriptor_table
@@ -536,17 +536,20 @@ fn look_for_usb_root_hubs() -> error::Result<()> {
             serial::log::debug_no_sync!("Warning: Controller failed to switch ownership:\n{error}");
         }
         usb_host_controller.reset()?;
-        for (i, port) in usb_host_controller.ports().into_iter().enumerate() {
+        for (i, mut port) in usb_host_controller.ports().into_iter().enumerate() {
             if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
                 && port.needs_reset()
             {
                 serial::log::debug_no_sync!("Port {i} needs reset");
-                let _ = usb_host_controller.reset_port(i).inspect_err(|err| {
+                let _ = usb_host_controller.reset_port(port).inspect_err(|err| {
                     serial::log::debug_no_sync!("Warning: Port reset failed: {err}");
                 });
             }
+            port = usb_host_controller.ports().get(i);
             if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent) {
                 serial::log::debug_no_sync!("Port {i} has device present");
+                serial::log::debug_no_sync!("Port number: {}", port.index());
+                serial::log::debug_no_sync!("Port Status and Control: {}", port.portsc());
             }
         }
     }

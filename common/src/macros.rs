@@ -25,7 +25,7 @@ macro_rules! make_bitmap {
         }
     };
     (new_type: $flags_type:ident, underlying_flag_type: $flag_type:ty, repr: $flag_unsigned_type:ty, nodisplay) => {
-        #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+        #[derive(Debug, Default, PartialEq, Eq, Clone)]
         pub struct $flags_type {
             bits: $flag_unsigned_type
         }

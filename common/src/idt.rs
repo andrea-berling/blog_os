@@ -81,7 +81,6 @@ impl GateDescriptorFlags {
 }
 
 #[repr(C, packed)]
-#[derive(Debug)]
 pub struct InterruptGateDescriptor {
     offset_low: u16,
     segment_selector: u16,

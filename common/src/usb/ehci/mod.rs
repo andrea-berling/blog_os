@@ -86,6 +86,35 @@ make_bitmap!(new_type: USBLegacySupportExtendedCapability, underlying_flag_type:
 #[derive(Clone, Copy)]
 pub struct Ports<'a>(&'a [u32]);
 
+pub struct Port {
+    portsc: PortStatusAndControlRegister,
+    index: usize,
+}
+
+impl Port {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn portsc(&self) -> &PortStatusAndControlRegister {
+        &self.portsc
+    }
+}
+
+impl core::ops::DerefMut for Port {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.portsc
+    }
+}
+
+impl core::ops::Deref for Port {
+    type Target = PortStatusAndControlRegister;
+
+    fn deref(&self) -> &Self::Target {
+        &self.portsc
+    }
+}
+
 pub struct PortsIterator<'a> {
     ports: Ports<'a>,
     current_index: usize,
@@ -100,14 +129,18 @@ impl<'a> Ports<'a> {
         self.0.len()
     }
 
-    pub fn get(&self, index: usize) -> PortStatusAndControlRegister {
-        PortStatusAndControlRegister {
-            bits: mmio::Volatile::new(core::ptr::addr_of!(self.0[index]) as u32).readd(),
+    pub fn get(&self, index: usize) -> Port {
+        Port {
+            portsc: PortStatusAndControlRegister {
+                bits: mmio::Volatile::new(core::ptr::addr_of!(self.0[index]) as u32).readd(),
+            },
+            index,
         }
     }
 
-    pub fn set(&self, index: usize, pscr: PortStatusAndControlRegister) {
-        mmio::Volatile::new(core::ptr::addr_of!(self.0[index]) as u32).writed(pscr.bits);
+    pub fn set(&self, port: Port) {
+        mmio::Volatile::new(core::ptr::addr_of!(self.0[port.index]) as u32)
+            .writed(port.portsc.bits);
     }
 }
 
@@ -125,7 +158,7 @@ impl<'a> IntoIterator for &Ports<'a> {
 }
 
 impl Iterator for PortsIterator<'_> {
-    type Item = PortStatusAndControlRegister;
+    type Item = Port;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_index < self.ports.len() {
@@ -262,7 +295,7 @@ impl Controller {
     }
 
     pub fn switch_ownership(&mut self, owner: Owner) -> error::Result<()> {
-        let error: Error = Facility::EhciController(self.pci_config_addr.into()).into();
+        let error: Error = Facility::EhciController(self.pci_config_addr.clone().into()).into();
         match owner {
             Owner::Bios => todo!(),
             Owner::Os => {
@@ -308,7 +341,9 @@ impl Controller {
 
     pub fn halt(&mut self) -> error::Result<()> {
         let error = Error::blank()
-            .with_facility(Facility::EhciController(self.pci_config_addr.into()))
+            .with_facility(Facility::EhciController(
+                self.pci_config_addr.clone().into(),
+            ))
             .with_context(Context::HaltingEhciController);
         let usb_status: USBStatusRegister = self.usb_status_register.get();
         if !usb_status.is_set(USBStatusRegisterFlag::HostControllerHalted) {
@@ -327,7 +362,9 @@ impl Controller {
 
     pub fn reset(&mut self) -> error::Result<()> {
         let error = Error::blank()
-            .with_facility(Facility::EhciController(self.pci_config_addr.into()))
+            .with_facility(Facility::EhciController(
+                self.pci_config_addr.clone().into(),
+            ))
             .with_context(Context::ResettingEhciController);
         self.halt()?;
 
@@ -345,14 +382,15 @@ impl Controller {
         Ok(())
     }
 
-    pub fn reset_port(&self, index: usize) -> error::Result<()> {
-        let mut port = self.ports().get(index);
+    pub fn reset_port(&self, mut port: Port) -> error::Result<()> {
+        let index = port.index;
         port.set_flag(PortStatusAndControlRegisterFlag::Reset);
         port.clear_flag(PortStatusAndControlRegisterFlag::Enabled);
-        self.ports().set(index, port);
+        self.ports().set(port);
         LowPrecisionTimer::wait_for_ms(50);
+        port = self.ports().get(index);
         port.clear_flag(PortStatusAndControlRegisterFlag::Reset);
-        self.ports().set(index, port);
+        self.ports().set(port);
         // NOTE: code below uses the LowPrecisionTimer directly due to the while let statement,
         // which has no case in the macro (and is not worth generalising the macro for)
         let clear_reset_timeout_ms = 2;
@@ -372,7 +410,7 @@ impl Controller {
             return Err(Error::new(
                 Fault::Timeout(clear_reset_timeout_ms),
                 Context::WaitingUSBPortResetClear(index as u8),
-                Facility::EhciController(self.pci_config_addr.into()),
+                Facility::EhciController(self.pci_config_addr.clone().into()),
             ));
         }
         Ok(())
@@ -384,9 +422,9 @@ impl Display for Controller {
         writeln!(f, "Base address: {:#p}", self.base_address as *const u8)?;
         writeln!(f, "CAPLENGTH: {}", self.capability_register_length)?;
         writeln!(f, "Host Controller Structural Parameters: {}", self.hcsp)?;
-        for (i, port) in self.ports.into_iter().enumerate() {
-            writeln!(f, "Port number: {i}")?;
-            writeln!(f, "{port}")?;
+        for port in self.ports.into_iter() {
+            writeln!(f, "Port number: {}", port.index)?;
+            writeln!(f, "Port Status and Control: {}", port.portsc)?;
         }
         writeln!(
             f,
@@ -553,7 +591,8 @@ impl PortStatusAndControlRegister {
 
     // NOTE: only meaningful is PortPowerControlSwitchIsOn (bit 12) is 1
     pub fn needs_reset(&self) -> bool {
-        let line_status = bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
+        let line_status =
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
         !self.is_set(PortStatusAndControlRegisterFlag::Enabled)
             && self.is_set(PortStatusAndControlRegisterFlag::DevicePresent)
             && line_status != 0b10
@@ -579,7 +618,8 @@ impl core::fmt::Display for PortStatusAndControlRegister {
             }
         }
         writeln!(f)?;
-        let line_status = bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
+        let line_status =
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
         writeln!(
             f,
             "Line status: {line_status:#b} ({interpretation})",

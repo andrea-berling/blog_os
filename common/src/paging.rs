@@ -90,7 +90,7 @@ macro_rules! impl_deref_to_page_table_entry {
     };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PML4Entry(PageTableEntry);
 
 impl_deref_to_page_table_entry!(PML4Entry);
@@ -109,7 +109,7 @@ impl Default for PML4 {
 impl PML4 {
     pub const fn new() -> Self {
         Self {
-            entries: [PML4Entry::new(); 512],
+            entries: [const { PML4Entry::new() }; 512],
         }
     }
 }
@@ -136,7 +136,7 @@ impl Default for PML4Entry {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PageDirectoryPointerTableEntry(PageTableEntry);
 
 impl_deref_to_page_table_entry!(PageDirectoryPointerTableEntry);
@@ -191,7 +191,7 @@ pub struct PageDirectoryPointerTable {
 impl PageDirectoryPointerTable {
     pub const fn new() -> Self {
         Self {
-            entries: [PageDirectoryPointerTableEntry::new(); 512],
+            entries: [const { PageDirectoryPointerTableEntry::new() }; 512],
         }
     }
 }
@@ -202,7 +202,7 @@ impl Default for PageDirectoryPointerTable {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PageDirectoryEntry(PageTableEntry);
 
 impl_deref_to_page_table_entry!(PageDirectoryEntry);

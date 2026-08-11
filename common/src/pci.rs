@@ -859,7 +859,7 @@ impl Iterator for EHCIControllers {
                     self.config_addr.dump_configuration_space_header()
                 {
                     if config_header.is_usb() {
-                        let controller_config_addr = self.config_addr;
+                        let controller_config_addr = self.config_addr.clone();
                         // Make sure that on next iteration, we go to the next device
                         self.config_addr.set_device_number(device_number + 1);
                         if let Some(value) =
@@ -878,7 +878,7 @@ impl Iterator for EHCIControllers {
                                 self.config_addr.dump_configuration_space_header()
                                 && config_header.is_usb()
                             {
-                                let controller_config_addr = self.config_addr;
+                                let controller_config_addr = self.config_addr.clone();
                                 // Make sure that on next iteration, we go to the next function
                                 self.config_addr.set_device_number(function + 1);
                                 if let Some(value) = self.try_create_ehci_controller(
