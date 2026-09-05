@@ -232,6 +232,15 @@ pub enum Fault {
     InvalidUSBAddress(u8),
     #[error("ArrayVec is full (capacity: {0})")]
     FullArrayVec(usize),
+    #[error(
+        "Requested bitset size can not be provided: requested {desired_size}, have capacity for {capacity}"
+    )]
+    BitSetSizeTooBig {
+        desired_size: usize,
+        capacity: usize,
+    },
+    #[error("Out of bounds bit set index: {index} (max size: {max_size})")]
+    OutOfBoundsBitSetIndex { index: usize, max_size: usize },
     #[error("Invalid Max Packet length: {0}")]
     InvalidUSBMaxPacketLength(u16),
 }
