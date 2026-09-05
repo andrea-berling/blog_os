@@ -12,6 +12,7 @@ use crate::{
 
 
 pub mod alloc;
+pub mod control_transfer;
 pub mod queue_head;
 pub mod transfer_descriptor;
 

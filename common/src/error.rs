@@ -61,6 +61,8 @@ pub enum Context {
     SettingUpProcessor,
     #[error("Waiting for Host Controller ownership to switch")]
     WaitingHostControllerOwnershipSwitch,
+    #[error("Reading descriptor")]
+    ReadingDescriptor,
     #[error("Waiting for USB Port reset bit to clear")]
     WaitingUSBPortResetClear(u8),
     #[error("Halting EHCI controller")]
