@@ -122,6 +122,7 @@ impl LowPrecisionTimer {
     pub fn wait_for_ms(timeout_ms: u64) {
         let mut timer = Self::new(core::time::Duration::from_millis(timeout_ms).as_nanos() as u64);
         while !timer.timeout() {
+            core::hint::spin_loop();
             timer.update();
         }
     }
@@ -133,6 +134,7 @@ macro_rules! bounded_wait {
         let timeout_ms = ::core::time::Duration::from_millis($duration_ms);
         let mut timeout_timer = $crate::timer::LowPrecisionTimer::new(timeout_ms.as_nanos() as u64);
         while !($until_check) && !timeout_timer.timeout() {
+            core::hint::spin_loop();
             timeout_timer.update();
         }
         if timeout_timer.timeout() && !($until_check) {
