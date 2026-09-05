@@ -143,7 +143,7 @@ pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> E
     .into()
 }
 
-pub const VALUE_LENGTH_BYTES: usize = 8;
+pub const VALUE_LENGTH_BYTES: usize = 20;
 pub const TYPE_NAME_LENGTH_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, Error)]
