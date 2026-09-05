@@ -1,7 +1,6 @@
 use core::fmt::Display;
 
 use num_enum::TryFromPrimitive;
-use num_traits::{AsPrimitive, PrimInt};
 use zerocopy::TryFromBytes;
 
 use crate::elf::{program_header, section};
@@ -104,10 +103,10 @@ enum Version {
     Current,
 }
 
-impl<T: AsPrimitive<u32> + PrimInt> From<T> for Version {
+impl<T: Into<u32>> From<T> for Version {
     fn from(value: T) -> Self {
-        match value.as_() {
-            1 => Self::Current,
+        match value.into() {
+            1u32 => Self::Current,
             _ => Self::Invalid,
         }
     }

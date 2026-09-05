@@ -130,14 +130,14 @@ impl<'a> Ports<'a> {
     pub fn get(&self, index: usize) -> Port {
         Port {
             portsc: PortStatusAndControlRegister {
-                bits: mmio::Volatile::new(core::ptr::addr_of!(self.0[index]) as u32).readd(),
+                bits: mmio::Volatile::new(core::ptr::addr_of!(self.0[index]) as usize).readd(),
             },
             index,
         }
     }
 
     pub fn set(&self, port: Port) {
-        mmio::Volatile::new(core::ptr::addr_of!(self.0[port.index]) as u32)
+        mmio::Volatile::new(core::ptr::addr_of!(self.0[port.index]) as usize)
             .writed(port.portsc.bits);
     }
 }
@@ -220,17 +220,17 @@ impl Controller {
     pub fn new(base_address: u32, pci_config_addr: ConfigAddressRegister) -> Self {
         // SAFETY: It is assumed that the given address points to the base of a EHCI device
         // Else it's UB
-        let capability_register_length = mmio::Volatile::new(base_address).readb();
+        let capability_register_length = mmio::Volatile::new(base_address as usize).readb();
         let hcsp = HostControllerStructuralParameters {
-            bits: mmio::Volatile::new(base_address + 4).readd(),
+            bits: mmio::Volatile::new((base_address + 4) as usize).readd(),
         };
         let n_ports = hcsp.n_ports();
-        let hccp = mmio::Volatile::new(base_address + 8).readd();
+        let hccp = mmio::Volatile::new((base_address + 8) as usize).readd();
         let eecp_pci_offset = ((hccp >> 8) & 0xff) as u8;
         let has_64_bit_addressing_capability = (hccp & 0x1) != 0;
         let operational_base = u32::from(capability_register_length) + base_address;
-        let usb_command_register = mmio::Volatile::new(operational_base);
-        let usb_status_register = mmio::Volatile::new(operational_base + 0x04);
+        let usb_command_register = mmio::Volatile::new(operational_base as usize);
+        let usb_status_register = mmio::Volatile::new((operational_base + 0x04) as usize);
         // TODO: check that eccp_pci_offset >= 0x40 and 32-bit aligned!
         let mut controller = Self {
             base_address,
@@ -327,7 +327,7 @@ impl Controller {
     /// # Panics
     /// Panics if the HCI version is not 1.0
     pub fn hci_version(&self) -> HCIVersion {
-        match mmio::Volatile::new(self.base_address + 2).readw() {
+        match mmio::Volatile::new((self.base_address + 2) as usize).readw() {
             0x0100 => HCIVersion::_1_0,
             version => panic!("Unexpected HCIVersion: {version:#x}"),
         }

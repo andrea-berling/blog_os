@@ -1,13 +1,11 @@
-use num_traits::AsPrimitive;
-
 pub struct Volatile {
     address: *mut u8,
 }
 
 impl Volatile {
-    pub fn new<T: AsPrimitive<usize>>(address: T) -> Self {
+    pub fn new(address: usize) -> Self {
         Self {
-            address: address.as_() as *mut u8,
+            address: address as *mut u8,
         }
     }
 
