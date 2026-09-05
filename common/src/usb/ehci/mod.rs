@@ -11,6 +11,8 @@ use crate::{
 };
 
 
+pub mod transfer_descriptor;
+
 // Source of truth: EHCI specification 1.0
 
 #[derive(TryFromPrimitive, Clone, Copy)]

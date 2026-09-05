@@ -230,6 +230,16 @@ pub enum Fault {
     EhciControllerNotHalted,
     #[error("Invalid USB Address: {0:#x}")]
     InvalidUSBAddress(u8),
+    #[error("Invalid USB Total Bytes to Transfer: {0}")]
+    InvalidUSBTotalBytesToTransfer(u16),
+    #[error("Invalid USB Current Page: {0}")]
+    InvalidUSBCurrentPage(u8),
+    #[error("Invalid USB Current Buffer Page Pointer Offset: {0}")]
+    InvalidUSBCurrentBufferPagePointerOffset(u16),
+    #[error("Unaligned EHCI Buffer Page Pointer: {0}")]
+    UnalignedEHCIBufferPagePointer(u32),
+    #[error("Invalid EHCI buffer page offset: {offset} (max: {max})")]
+    InvalidEHCIBufferOffset { offset: usize, max: usize },
     #[error("ArrayVec is full (capacity: {0})")]
     FullArrayVec(usize),
     #[error(
