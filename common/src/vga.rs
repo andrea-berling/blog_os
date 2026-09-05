@@ -30,12 +30,6 @@ pub enum Color {
 #[repr(transparent)]
 struct ColorCode(u8);
 
-impl ColorCode {
-    const fn new(foreground: Color, background: Color) -> ColorCode {
-        ColorCode((background as u8) << 4 | (foreground as u8))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 struct ScreenChar {
@@ -43,22 +37,24 @@ struct ScreenChar {
     color_code: ColorCode,
 }
 
-const BUFFER_HEIGHT: usize = 25;
-const BUFFER_WIDTH: usize = 80;
-
 #[repr(transparent)]
 struct Buffer {
     chars: [[ScreenChar; BUFFER_WIDTH]; BUFFER_HEIGHT],
 }
 
-// Buffer has the same layout as Buffer.chars, and each element of Buffer.chars has the same layout
-// as u16
-const VGA_BUF: *mut Buffer = 0xb8000 as *mut Buffer;
-
 pub struct Writer {
     column_position: usize,
     color_code: ColorCode,
     buffer: *mut Buffer,
+}
+
+const BUFFER_HEIGHT: usize = 25;
+const BUFFER_WIDTH: usize = 80;
+
+impl ColorCode {
+    const fn new(foreground: Color, background: Color) -> ColorCode {
+        ColorCode((background as u8) << 4 | (foreground as u8))
+    }
 }
 
 impl Writer {
@@ -170,8 +166,6 @@ impl core::fmt::Write for Writer {
     }
 }
 
-static mut DEFAULT_SINGLE_TASK_WRITER: Writer = Writer::new();
-
 pub fn __writeln_no_sync(args: core::fmt::Arguments) -> core::fmt::Result {
     // SAFETY: no multitasking, no synchronization needed
     let writer_ptr = &raw mut DEFAULT_SINGLE_TASK_WRITER;
@@ -189,3 +183,9 @@ macro_rules! vga_writeln_no_sync {
 }
 
 pub use vga_writeln_no_sync as writeln_no_sync;
+
+// Buffer has the same layout as Buffer.chars, and each element of Buffer.chars has the same layout
+// as u16
+const VGA_BUF: *mut Buffer = 0xb8000 as *mut Buffer;
+
+static mut DEFAULT_SINGLE_TASK_WRITER: Writer = Writer::new();

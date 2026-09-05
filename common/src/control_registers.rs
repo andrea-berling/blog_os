@@ -34,22 +34,6 @@ pub enum ControlRegister3Bit {
 
 make_bitmap!(new_type: ControlRegister3, underlying_flag_type: ControlRegister3Bit, repr: u64, nodisplay);
 
-impl ControlRegister3 {
-    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> error::Result<()> {
-        let address = pml4 as *const _ as u64;
-        if !address.is_multiple_of(0x1000) {
-            return Err(Fault::InvalidAddressForType {
-                address,
-                dst_type_name: core::any::type_name::<paging::PML4>().as_bytes().into(),
-                alignment: 0x1000,
-            }
-            .into());
-        }
-        self.bits = address;
-        Ok(())
-    }
-}
-
 #[allow(unused)]
 #[repr(u32)]
 pub enum ControlRegister4Bit {
@@ -84,9 +68,36 @@ pub enum ControlRegister4Bit {
 
 make_bitmap!(new_type: ControlRegister4, underlying_flag_type: ControlRegister4Bit, repr: u32, nodisplay);
 
+#[allow(unused)]
+#[repr(u64)]
+pub enum ExtendedFeatureEnableRegisterBit {
+    SyscallEnable = 1 << 0,
+    IA32eEnabled = 1 << 8,
+    IA32eActive = 1 << 10,
+    ExecuteDisableBitEnabled = 1 << 11,
+}
+
+make_bitmap!(new_type: ExtendedFeatureEnableRegister, underlying_flag_type: ExtendedFeatureEnableRegisterBit, repr: u64, nodisplay);
+
 #[repr(u32)]
 pub enum Msr {
     Efer(ExtendedFeatureEnableRegister) = 0xC000_0080,
+}
+
+impl ControlRegister3 {
+    pub fn set_pml4(&mut self, pml4: &'static paging::PML4) -> error::Result<()> {
+        let address = pml4 as *const _ as u64;
+        if !address.is_multiple_of(0x1000) {
+            return Err(Fault::InvalidAddressForType {
+                address,
+                dst_type_name: core::any::type_name::<paging::PML4>().as_bytes().into(),
+                alignment: 0x1000,
+            }
+            .into());
+        }
+        self.bits = address;
+        Ok(())
+    }
 }
 
 pub fn wrmsr(msr: Msr) {
@@ -111,14 +122,3 @@ pub fn wrmsr(msr: Msr) {
         )
     }
 }
-
-#[allow(unused)]
-#[repr(u64)]
-pub enum ExtendedFeatureEnableRegisterBit {
-    SyscallEnable = 1 << 0,
-    IA32eEnabled = 1 << 8,
-    IA32eActive = 1 << 10,
-    ExecuteDisableBitEnabled = 1 << 11,
-}
-
-make_bitmap!(new_type: ExtendedFeatureEnableRegister, underlying_flag_type: ExtendedFeatureEnableRegisterBit, repr: u64, nodisplay);

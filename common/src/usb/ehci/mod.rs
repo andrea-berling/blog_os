@@ -33,23 +33,154 @@ pub enum HostControllerStructuralParametersFlag {
     SupportsPortIndicatorControl = 1 << 16,
 }
 
-impl Display for HostControllerStructuralParametersFlag {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            HostControllerStructuralParametersFlag::SupportsPortPowerSwitches => {
-                write!(f, "Power Port Control")
-            }
-            HostControllerStructuralParametersFlag::PortRoutingInHCSPPortrouteArray => {
-                write!(f, "Explicit Port Routing")
-            }
-            HostControllerStructuralParametersFlag::SupportsPortIndicatorControl => {
-                write!(f, "Port Indicators")
-            }
-        }
-    }
+make_bitmap!(new_type: HostControllerStructuralParameters, underlying_flag_type: HostControllerStructuralParametersFlag, repr: u32, bit_skipper: |i| i != 4 && i != 7 && i != 16);
+
+pub enum HCIVersion {
+    _1_0,
 }
 
-make_bitmap!(new_type: HostControllerStructuralParameters, underlying_flag_type: HostControllerStructuralParametersFlag, repr: u32, bit_skipper: |i| i != 4 && i != 7 && i != 16);
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u32)]
+pub enum USBLegacySupportExtendedCapabilityFlag {
+    OsOwned = 1 << 24,
+    BiosOwned = 1 << 16,
+}
+
+make_bitmap!(new_type: USBLegacySupportExtendedCapability, underlying_flag_type: USBLegacySupportExtendedCapabilityFlag, repr: u32, bit_skipper: |i| i != 24 && i != 16);
+
+// NOTE: the u32 in this slice should not be read directly! You should take addr_of(ports[i])
+// and do a volatile read
+#[derive(Clone, Copy)]
+pub struct Ports {
+    base: *const (),
+    n_ports: usize,
+}
+
+pub struct Port {
+    portsc: mmio::VolatilePtr<PortStatusAndControlRegister>,
+    index: usize,
+}
+
+pub struct PortsIterator {
+    ports: Ports,
+    current_index: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Owner {
+    Bios,
+    Os,
+}
+
+pub struct AsyncListAddr(u32);
+
+pub struct Controller {
+    base_address: u32,
+    capability_register_length: u8,
+    hcsp: mmio::VolatilePtr<HostControllerStructuralParameters>,
+    eecp_pci_offset: Option<u8>,
+    pci_config_addr: ConfigAddressRegister,
+    has_64_bit_addressing_capability: bool,
+    usb_command_register: mmio::VolatilePtr<USBCommandRegister>,
+    usb_status_register: mmio::VolatilePtr<USBStatusRegister>,
+    async_list_addr: mmio::VolatilePtr<AsyncListAddr>,
+    owner: Option<Owner>,
+    ports: Ports,
+}
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum PortStatusAndControlRegisterFlag {
+    DevicePresent = 1 << 0,
+    CurrentConnectStatusChange = 1 << 1,
+    Enabled = 1 << 2,
+    PortEnabledStatusChange = 1 << 3,
+    InOverCurrent = 1 << 4,
+    OverCurrentStatusChange = 1 << 5,
+    ResumeDetected = 1 << 6,
+    Suspend = 1 << 7,
+    Reset = 1 << 8,
+    DataPlus = 1 << 10,
+    DataMinus = 1 << 11,
+    PortPowerControlSwitchIsOn = 1 << 12,
+    CompanionHostControllerOwned = 1 << 13,
+    WakeOnConnect = 1 << 20,
+    WakeOnDisconnect = 1 << 21,
+    WakeOnOverCurrent = 1 << 22,
+}
+
+make_bitmap!(new_type: PortStatusAndControlRegister, underlying_flag_type: PortStatusAndControlRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBInterruptEnableRegisterFlag {
+    ThresholdInterrupts = 1 << 0,
+    USBError = 1 << 1,
+    PortChange = 1 << 2,
+    FrameListRollover = 1 << 3,
+    HostSystemError = 1 << 4,
+    InterruptOnAsyncAdvance = 1 << 5,
+}
+
+make_bitmap!(new_type: USBInterruptEnableRegister, underlying_flag_type: USBInterruptEnableRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBCommandRegisterFlag {
+    Run = 1 << 0,
+    HostControllerReset = 1 << 1,
+    PeriodicScheduleEnable = 1 << 4,
+    AsynchronousScheduleEnable = 1 << 5,
+    InterruptOnAsyncAdvanceDoorbell = 1 << 6,
+    LightHostControllerReset = 1 << 7,
+    AsynchronousScheduleParkModeEnable = 1 << 11,
+}
+
+make_bitmap!(new_type: USBCommandRegister, underlying_flag_type: USBCommandRegisterFlag, repr: u32, nodisplay);
+
+#[repr(u32)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum USBStatusRegisterFlag {
+    USBInterrupt = 1 << 0,
+    USBErrorInterrupt = 1 << 1,
+    PortChangeDetect = 1 << 2,
+    FrameListRollover = 1 << 3,
+    HostSystemError = 1 << 4,
+    InterruptOnAsyncAdvance = 1 << 5,
+    HostControllerHalted = 1 << 12,
+    Reclamation = 1 << 13,
+    PeriodicScheduleStatus = 1 << 14,
+    AsynchronousScheduleStatus = 1 << 15,
+}
+
+make_bitmap!(new_type: USBStatusRegister, underlying_flag_type: USBStatusRegisterFlag, repr: u32, nodisplay);
+
+#[derive(TryFromPrimitive, Debug)]
+#[repr(u8)]
+pub enum PortIndicatorStatus {
+    Off,
+    Amber,
+    Green,
+    Undefined,
+}
+
+#[derive(TryFromPrimitive, Debug)]
+#[repr(u8)]
+pub enum PortTestControl {
+    Disabled,
+    TestJState,
+    TestKState,
+    TestSE0NAK,
+    TestPacket,
+    TestForceEnable,
+}
+
+pub struct Device {
+    controller_address: PciDevice,
+    address: Address,
+    default_endpoint_speed: EndpointSpeed,
+    descriptor: DeviceDescriptor,
+}
 
 impl HostControllerStructuralParameters {
     pub fn n_ports(&self) -> u8 {
@@ -69,61 +200,12 @@ impl HostControllerStructuralParameters {
     }
 }
 
-pub enum HCIVersion {
-    _1_0,
-}
-
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u32)]
-pub enum USBLegacySupportExtendedCapabilityFlag {
-    OsOwned = 1 << 24,
-    BiosOwned = 1 << 16,
-}
-
-impl Display for USBLegacySupportExtendedCapabilityFlag {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            USBLegacySupportExtendedCapabilityFlag::OsOwned => f.write_str("OS Owned"),
-            USBLegacySupportExtendedCapabilityFlag::BiosOwned => f.write_str("BIOS Owned"),
-        }
-    }
-}
-
-make_bitmap!(new_type: USBLegacySupportExtendedCapability, underlying_flag_type: USBLegacySupportExtendedCapabilityFlag, repr: u32, bit_skipper: |i| i != 24 && i != 16);
-
-// NOTE: the u32 in this slice should not be read directly! You should take addr_of(ports[i])
-// and do a volatile read
-#[derive(Clone, Copy)]
-pub struct Ports {
-    base: *const (),
-    n_ports: usize,
-}
-
-pub struct Port {
-    portsc: mmio::VolatilePtr<PortStatusAndControlRegister>,
-    index: usize,
-}
-
 impl Port {
     pub fn index(&self) -> usize {
         self.index
     }
 
     pub fn portsc(&self) -> &mmio::VolatilePtr<PortStatusAndControlRegister> {
-        &self.portsc
-    }
-}
-
-impl core::ops::DerefMut for Port {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.portsc
-    }
-}
-
-impl core::ops::Deref for Port {
-    type Target = mmio::VolatilePtr<PortStatusAndControlRegister>;
-
-    fn deref(&self) -> &Self::Target {
         &self.portsc
     }
 }
@@ -157,74 +239,12 @@ impl Ports {
     }
 }
 
-impl IntoIterator for &Ports {
-    type Item = <PortsIterator as Iterator>::Item;
-
-    type IntoIter = PortsIterator;
-
-    fn into_iter(self) -> Self::IntoIter {
-        PortsIterator {
-            ports: *self,
-            current_index: 0,
-        }
-    }
-}
-
-pub struct PortsIterator {
-    ports: Ports,
-    current_index: usize,
-}
-
-impl Iterator for PortsIterator {
-    type Item = Port;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index < self.ports.len() {
-            self.current_index += 1;
-            Some(self.ports.get(self.current_index - 1))
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Owner {
-    Bios,
-    Os,
-}
-
-impl Display for Owner {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Owner::Bios => f.write_str("BIOS"),
-            Owner::Os => f.write_str("OS"),
-        }
-    }
-}
-
-pub struct AsyncListAddr(u32);
-
 impl AsyncListAddr {
     pub fn set_address(&mut self, address: *const RawQueueHead) {
         // FIXME: today addresses are always physical, one day they'll be virtual. This will break
         // that day
         bits::set_bits!(bits_expr: self.0, value: (address as u32) >> 5, n_bits: 27, starts_at_bit: 5, bits_expr_ty: u32);
     }
-}
-
-pub struct Controller {
-    base_address: u32,
-    capability_register_length: u8,
-    hcsp: mmio::VolatilePtr<HostControllerStructuralParameters>,
-    eecp_pci_offset: Option<u8>,
-    pci_config_addr: ConfigAddressRegister,
-    has_64_bit_addressing_capability: bool,
-    usb_command_register: mmio::VolatilePtr<USBCommandRegister>,
-    usb_status_register: mmio::VolatilePtr<USBStatusRegister>,
-    async_list_addr: mmio::VolatilePtr<AsyncListAddr>,
-    owner: Option<Owner>,
-    ports: Ports,
 }
 
 impl Controller {
@@ -638,6 +658,67 @@ impl Controller {
     }
 }
 
+impl PortStatusAndControlRegister {
+    /// # Panics
+    /// Never
+    pub fn port_indicator_status(&self) -> PortIndicatorStatus {
+        bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 14, return_ty: u8)
+            .try_into()
+            .expect("unreachable")
+    }
+
+    /// # Panics
+    /// If the test control bits have a value > 0b1001
+    pub fn port_test_control(&self) -> PortTestControl {
+        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 16, return_ty: u8)
+            .try_into()
+            .expect("unexpected value for port test control")
+    }
+
+    // NOTE: only meaningful is PortPowerControlSwitchIsOn (bit 12) is 1
+    pub fn needs_reset(&self) -> bool {
+        let line_status =
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
+        !self.is_set(PortStatusAndControlRegisterFlag::Enabled)
+            && self.is_set(PortStatusAndControlRegisterFlag::DevicePresent)
+            && line_status != 0b10
+    }
+}
+
+impl Display for HostControllerStructuralParametersFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HostControllerStructuralParametersFlag::SupportsPortPowerSwitches => {
+                write!(f, "Power Port Control")
+            }
+            HostControllerStructuralParametersFlag::PortRoutingInHCSPPortrouteArray => {
+                write!(f, "Explicit Port Routing")
+            }
+            HostControllerStructuralParametersFlag::SupportsPortIndicatorControl => {
+                write!(f, "Port Indicators")
+            }
+        }
+    }
+}
+
+impl Display for USBLegacySupportExtendedCapabilityFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            USBLegacySupportExtendedCapabilityFlag::OsOwned => f.write_str("OS Owned"),
+            USBLegacySupportExtendedCapabilityFlag::BiosOwned => f.write_str("BIOS Owned"),
+        }
+    }
+}
+
+impl Display for Owner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Owner::Bios => f.write_str("BIOS"),
+            Owner::Os => f.write_str("OS"),
+        }
+    }
+}
+
 impl Display for Controller {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(f, "Base address: {:#p}", self.base_address as *const u8)?;
@@ -675,27 +756,6 @@ impl Display for Controller {
     }
 }
 
-#[repr(u32)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum PortStatusAndControlRegisterFlag {
-    DevicePresent = 1 << 0,
-    CurrentConnectStatusChange = 1 << 1,
-    Enabled = 1 << 2,
-    PortEnabledStatusChange = 1 << 3,
-    InOverCurrent = 1 << 4,
-    OverCurrentStatusChange = 1 << 5,
-    ResumeDetected = 1 << 6,
-    Suspend = 1 << 7,
-    Reset = 1 << 8,
-    DataPlus = 1 << 10,
-    DataMinus = 1 << 11,
-    PortPowerControlSwitchIsOn = 1 << 12,
-    CompanionHostControllerOwned = 1 << 13,
-    WakeOnConnect = 1 << 20,
-    WakeOnDisconnect = 1 << 21,
-    WakeOnOverCurrent = 1 << 22,
-}
-
 impl Display for PortStatusAndControlRegisterFlag {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let description = match self {
@@ -727,99 +787,6 @@ impl Display for PortStatusAndControlRegisterFlag {
             PortStatusAndControlRegisterFlag::WakeOnOverCurrent => "Wake on over-current",
         };
         write!(f, "{}", description)
-    }
-}
-
-make_bitmap!(new_type: PortStatusAndControlRegister, underlying_flag_type: PortStatusAndControlRegisterFlag, repr: u32, nodisplay);
-
-#[repr(u32)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum USBInterruptEnableRegisterFlag {
-    ThresholdInterrupts = 1 << 0,
-    USBError = 1 << 1,
-    PortChange = 1 << 2,
-    FrameListRollover = 1 << 3,
-    HostSystemError = 1 << 4,
-    InterruptOnAsyncAdvance = 1 << 5,
-}
-
-make_bitmap!(new_type: USBInterruptEnableRegister, underlying_flag_type: USBInterruptEnableRegisterFlag, repr: u32, nodisplay);
-
-#[repr(u32)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum USBCommandRegisterFlag {
-    Run = 1 << 0,
-    HostControllerReset = 1 << 1,
-    PeriodicScheduleEnable = 1 << 4,
-    AsynchronousScheduleEnable = 1 << 5,
-    InterruptOnAsyncAdvanceDoorbell = 1 << 6,
-    LightHostControllerReset = 1 << 7,
-    AsynchronousScheduleParkModeEnable = 1 << 11,
-}
-
-make_bitmap!(new_type: USBCommandRegister, underlying_flag_type: USBCommandRegisterFlag, repr: u32, nodisplay);
-
-#[repr(u32)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum USBStatusRegisterFlag {
-    USBInterrupt = 1 << 0,
-    USBErrorInterrupt = 1 << 1,
-    PortChangeDetect = 1 << 2,
-    FrameListRollover = 1 << 3,
-    HostSystemError = 1 << 4,
-    InterruptOnAsyncAdvance = 1 << 5,
-    HostControllerHalted = 1 << 12,
-    Reclamation = 1 << 13,
-    PeriodicScheduleStatus = 1 << 14,
-    AsynchronousScheduleStatus = 1 << 15,
-}
-
-make_bitmap!(new_type: USBStatusRegister, underlying_flag_type: USBStatusRegisterFlag, repr: u32, nodisplay);
-
-#[derive(TryFromPrimitive, Debug)]
-#[repr(u8)]
-pub enum PortIndicatorStatus {
-    Off,
-    Amber,
-    Green,
-    Undefined,
-}
-
-#[derive(TryFromPrimitive, Debug)]
-#[repr(u8)]
-pub enum PortTestControl {
-    Disabled,
-    TestJState,
-    TestKState,
-    TestSE0NAK,
-    TestPacket,
-    TestForceEnable,
-}
-
-impl PortStatusAndControlRegister {
-    /// # Panics
-    /// Never
-    pub fn port_indicator_status(&self) -> PortIndicatorStatus {
-        bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 14, return_ty: u8)
-            .try_into()
-            .expect("unreachable")
-    }
-
-    /// # Panics
-    /// If the test control bits have a value > 0b1001
-    pub fn port_test_control(&self) -> PortTestControl {
-        bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 16, return_ty: u8)
-            .try_into()
-            .expect("unexpected value for port test control")
-    }
-
-    // NOTE: only meaningful is PortPowerControlSwitchIsOn (bit 12) is 1
-    pub fn needs_reset(&self) -> bool {
-        let line_status =
-            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 10, return_ty: u32);
-        !self.is_set(PortStatusAndControlRegisterFlag::Enabled)
-            && self.is_set(PortStatusAndControlRegisterFlag::DevicePresent)
-            && line_status != 0b10
     }
 }
 
@@ -862,6 +829,30 @@ impl core::fmt::Display for PortStatusAndControlRegister {
     }
 }
 
+impl Display for Device {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "USB Hub's PCI address: {}", self.controller_address)?;
+        writeln!(f, "Device address: {}", self.address)?;
+        writeln!(f, "Default Endpoint Speed: {}", self.default_endpoint_speed)?;
+        writeln!(f, "Device Descriptor:\n{}\n======", self.descriptor)?;
+        Ok(())
+    }
+}
+
+impl core::ops::Deref for Port {
+    type Target = mmio::VolatilePtr<PortStatusAndControlRegister>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.portsc
+    }
+}
+
+impl core::ops::DerefMut for Port {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.portsc
+    }
+}
+
 impl Maskable for PortStatusAndControlRegister {
     type Mask = Self;
 
@@ -874,19 +865,27 @@ impl Maskable for PortStatusAndControlRegister {
     }
 }
 
-pub struct Device {
-    controller_address: PciDevice,
-    address: Address,
-    default_endpoint_speed: EndpointSpeed,
-    descriptor: DeviceDescriptor,
+impl IntoIterator for &Ports {
+    type IntoIter = PortsIterator;
+    type Item = <PortsIterator as Iterator>::Item;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PortsIterator {
+            ports: *self,
+            current_index: 0,
+        }
+    }
 }
 
-impl Display for Device {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "USB Hub's PCI address: {}", self.controller_address)?;
-        writeln!(f, "Device address: {}", self.address)?;
-        writeln!(f, "Default Endpoint Speed: {}", self.default_endpoint_speed)?;
-        writeln!(f, "Device Descriptor:\n{}\n======", self.descriptor)?;
-        Ok(())
+impl Iterator for PortsIterator {
+    type Item = Port;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index < self.ports.len() {
+            self.current_index += 1;
+            Some(self.ports.get(self.current_index - 1))
+        } else {
+            None
+        }
     }
 }

@@ -33,6 +33,22 @@ use common::{
 
 use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
 
+struct InitializationParameters {
+    kernel_entrypoint: u32,
+    cr0: ControlRegister0,
+    cr3: ControlRegister3,
+    cr4: ControlRegister4,
+    efer: ExtendedFeatureEnableRegister,
+    stack_pointer: u32,
+    code_selector: usize,
+}
+
+const GDTI_32_BIT_CODE_SEGMENT: usize = 1;
+const GDTI_32_BIT_DATA_SEGMENT: usize = 2;
+const GDTI_64_BIT_CODE_SEGMENT: usize = 3;
+const GDTI_64_BIT_DATA_SEGMENT: usize = 4;
+const GDTI_TSS: usize = 5;
+
 /// This function is called on panic.
 #[cfg(target_os = "none")]
 #[panic_handler]
@@ -117,16 +133,6 @@ pub extern "cdecl" fn start(
     panic!("We didn't load the kernel?");
 }
 
-struct InitializationParameters {
-    kernel_entrypoint: u32,
-    cr0: ControlRegister0,
-    cr3: ControlRegister3,
-    cr4: ControlRegister4,
-    efer: ExtendedFeatureEnableRegister,
-    stack_pointer: u32,
-    code_selector: usize,
-}
-
 #[cfg(target_os = "none")]
 fn init(
     drive_parameters_pointer: *const u8,
@@ -207,16 +213,6 @@ fn setup_control_registers() -> error::Result<(
     Ok((cr0, cr3, cr4, efer))
 }
 
-static mut GLOBAL_DESCRIPTOR_TABLE: gdt::GDT<6> = [gdt::SegmentDescriptor::blank(); 6];
-static mut TASK_STATE_SEGMENT: tss::TaskStateSegment = tss::TaskStateSegment::blank();
-static SS0_STACK: tss::Stack<1024> = tss::Stack::new([0; 1024]);
-
-const GDTI_32_BIT_CODE_SEGMENT: usize = 1;
-const GDTI_32_BIT_DATA_SEGMENT: usize = 2;
-const GDTI_64_BIT_CODE_SEGMENT: usize = 3;
-const GDTI_64_BIT_DATA_SEGMENT: usize = 4;
-const GDTI_TSS: usize = 5;
-
 /// # Panics
 /// Panics if the values for the data segment and the size of the gdt::SegmentDescriptor struct
 /// exceed u16 (likely programming errors)
@@ -294,9 +290,6 @@ fn setup_global_descriptor_table() -> error::Result<()> {
     }
     Ok(())
 }
-
-static mut INTERRUPT_DESCRIPTOR_TABLE: idt::IDT<{ idt::STANDARD_VECTOR_TABLE_SIZE }> =
-    [idt::GateDescriptor::blank(); _];
 
 extern "cdecl" fn general_protection_handler(
     ebp: u32,
@@ -377,10 +370,6 @@ fn setup_debug_interrupt_descriptor_table() {
         );
     }
 }
-
-static mut PML4: paging::PML4 = paging::PML4::new();
-static mut PAGE_DIRECTORY_POINTER_TABLE: paging::PageDirectoryPointerTable =
-    paging::PageDirectoryPointerTable::new();
 
 fn setup_page_tables() -> error::Result<()> {
     let pdpt_ptr = &raw mut PAGE_DIRECTORY_POINTER_TABLE;
@@ -641,3 +630,14 @@ fn main() {
         println!("--------");
     }
 }
+
+static mut GLOBAL_DESCRIPTOR_TABLE: gdt::GDT<6> = [gdt::SegmentDescriptor::blank(); 6];
+static mut TASK_STATE_SEGMENT: tss::TaskStateSegment = tss::TaskStateSegment::blank();
+static SS0_STACK: tss::Stack<1024> = tss::Stack::new([0; 1024]);
+
+static mut INTERRUPT_DESCRIPTOR_TABLE: idt::IDT<{ idt::STANDARD_VECTOR_TABLE_SIZE }> =
+    [idt::GateDescriptor::blank(); _];
+
+static mut PML4: paging::PML4 = paging::PML4::new();
+static mut PAGE_DIRECTORY_POINTER_TABLE: paging::PageDirectoryPointerTable =
+    paging::PageDirectoryPointerTable::new();

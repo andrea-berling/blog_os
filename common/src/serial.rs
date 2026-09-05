@@ -1,10 +1,6 @@
 use crate::{ioport::Port, make_bitmap};
 
-const COM1: u16 = 0x3F8;
-
 pub struct Com1;
-
-static mut COM1_INITIALIZED: bool = false;
 
 #[allow(unused)]
 #[repr(u8)]
@@ -74,6 +70,8 @@ pub enum LineStatusRegisterFlag {
 
 make_bitmap!(new_type: LineStatusRegisterFlags, underlying_flag_type: LineStatusRegisterFlag, repr: u8, nodisplay);
 
+const COM1: u16 = 0x3F8;
+
 impl Com1 {
     /// # Panics
     /// Uses Self::initialize under the hood, which may panic under certain conditions
@@ -100,6 +98,7 @@ impl Com1 {
     fn divisor_register_low() -> Port {
         Port::new(COM1)
     }
+
     fn divisor_register_high() -> Port {
         Port::new(COM1 + 1)
     }
@@ -111,6 +110,7 @@ impl Com1 {
     fn line_status_register() -> Port {
         Port::new(COM1 + 5)
     }
+
     fn receive_register() -> Port {
         Port::new(COM1)
     }
@@ -201,3 +201,5 @@ pub mod log {
 
     pub use serial_debug_no_sync as debug_no_sync;
 }
+
+static mut COM1_INITIALIZED: bool = false;

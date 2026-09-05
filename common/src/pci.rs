@@ -27,103 +27,12 @@ pub enum ConfigAddressRegisterFlag {
 
 make_bitmap!(new_type: ConfigAddressRegister, underlying_flag_type: ConfigAddressRegisterFlag, repr: u32, nodisplay);
 
-impl ConfigAddressRegister {
-    pub fn set_register_offset(&mut self, register_number: u8) {
-        self.bits &= !(0x3f << 2);
-        self.bits |= register_number as u32 & (0x3f << 2);
-    }
-
-    pub fn set_function_number(&mut self, function_number: u8) {
-        bits::set_bits!(bits_expr: self.bits, value: function_number, n_bits: 3, starts_at_bit: 8, bits_expr_ty: u32);
-    }
-
-    pub fn set_device_number(&mut self, device_number: u8) {
-        bits::set_bits!(bits_expr: self.bits, value: device_number, n_bits: 5, starts_at_bit: 11, bits_expr_ty: u32);
-    }
-
-    pub fn set_bus_number(&mut self, bus_number: u8) {
-        bits::set_bits!(bits_expr: self.bits, value: bus_number, n_bits: 8, starts_at_bit: 16, bits_expr_ty: u32);
-    }
-
-    pub fn get_function_number(&self) -> u8 {
-        bits::get_bits!(bits_expr: self.bits, n_bits: 3, starts_at_bit: 8, return_ty: u8)
-    }
-
-    pub fn get_device_number(&self) -> u8 {
-        bits::get_bits!(bits_expr: self.bits, n_bits: 5, starts_at_bit: 11, return_ty: u8)
-    }
-
-    pub fn get_bus_number(&self) -> u8 {
-        bits::get_bits!(bits_expr: self.bits, n_bits: 8, starts_at_bit: 16, return_ty: u8)
-    }
-
-    pub fn read_dword(&mut self) -> u32 {
-        let config_address_port = Port::new(CONFIG_ADDRESS);
-        let config_data_port = Port::new(CONFIG_DATA);
-        self.set_flag(ConfigAddressRegisterFlag::Enable);
-
-        config_address_port.writed(self.bits);
-        config_data_port.readd()
-    }
-
-    pub fn write_dword(&mut self, dword: u32) {
-        let config_address_port = Port::new(CONFIG_ADDRESS);
-        let config_data_port = Port::new(CONFIG_DATA);
-        self.set_flag(ConfigAddressRegisterFlag::Enable);
-
-        config_address_port.writed(self.bits);
-        config_data_port.writed(dword);
-    }
-
-    pub fn dump_configuration_space_header(
-        &mut self,
-    ) -> Option<error::Result<ConfigurationSpaceHeader>> {
-        let mut bytes = [0u8; size_of::<ConfigurationSpaceHeader>()];
-        let mut offset = 0usize;
-        self.set_register_offset(offset as u8);
-        self.read_dword()
-            .to_le_bytes()
-            .write_to_prefix(&mut bytes[offset..])
-            .ok()?;
-        offset += 4;
-        if u16::from_le_bytes([bytes[0], bytes[1]]) == 0xff_ff {
-            return None;
-        }
-        while offset < bytes.len() {
-            self.set_register_offset(offset as u8);
-            self.read_dword()
-                .to_le_bytes()
-                .write_to_prefix(&mut bytes[offset..])
-                .ok()?;
-            offset += 4;
-        }
-        Some(ConfigurationSpaceHeader::try_from(bytes.as_slice()))
-    }
-}
-
-impl From<ConfigAddressRegister> for PciDevice {
-    fn from(value: ConfigAddressRegister) -> Self {
-        PciDevice::new(
-            value.get_bus_number(),
-            value.get_device_number(),
-            value.get_function_number(),
-        )
-    }
-}
-
 #[repr(u32)]
 pub enum ConfigDataRegisterFlag {
     ConfigurationDataWindow = 1 << 31,
 }
 
 make_bitmap!(new_type: ConfigDataRegister, underlying_flag_type: ConfigDataRegisterFlag, repr: u32, nodisplay);
-
-impl ConfigDataRegister {
-    pub fn set_value(&mut self, value: u32) {
-        self.bits &= 0x7f_ff_ff_ff;
-        self.bits |= value & 0x7f_ff_ff_ff;
-    }
-}
 
 #[repr(u8)]
 pub enum ConfigurationSpaceHeaderVersionFlag {
@@ -138,30 +47,6 @@ pub enum HeaderType {
     Type0,
     Type1,
     CardbusBridge,
-}
-
-impl core::fmt::Display for HeaderType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            HeaderType::Type0 => write!(f, "Type 0 (Endpoints)"),
-            HeaderType::Type1 => write!(f, "Type 1 (PCI-to-PCI Bridge)"),
-            HeaderType::CardbusBridge => write!(f, "CardBus Bridge"),
-        }
-    }
-}
-
-impl ConfigurationSpaceHeaderVersion {
-    pub fn type0() -> Self {
-        Self { bits: 0 }
-    }
-
-    pub fn type1() -> Self {
-        Self { bits: 1 }
-    }
-
-    pub fn cardbus_bridge() -> Self {
-        Self { bits: 2 }
-    }
 }
 
 #[derive(TryFromPrimitive, Clone, Copy)]
@@ -309,6 +194,404 @@ pub enum Class {
 
     DPIOModules = 0x11_00_00,
     OtherDataAcquisitionSignalProcessingController = 0x11_80_00,
+}
+
+#[derive(TryFromBytes, Immutable, Debug, Clone, Copy)]
+pub struct Reserved<const N: usize>([u8; N]);
+
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C, packed)]
+pub struct ConfigurationSpaceHeader {
+    // REQUIRED
+    vendor_id: u16,
+    // REQUIRED
+    device_id: u16,
+    // REQUIRED
+    command: u16,
+    // REQUIRED
+    status: u16,
+    // REQUIRED
+    revision_id: u8,
+    // REQUIRED
+    programming_interface: u8,
+    // REQUIRED
+    subclass: u8,
+    // REQUIRED
+    base_class: u8,
+    cache_line_size: u8,
+    latency_timer: u8,
+    // REQUIRED
+    header_type: u8,
+    builtin_self_test: u8,
+    base_address_register_1: u32,
+    base_address_register_2: u32,
+    base_address_register_3: u32,
+    base_address_register_4: u32,
+    base_address_register_5: u32,
+    base_address_register_6: u32,
+    cardbus_cis_pointer: u32,
+    subsystem_vendor_id: u16,
+    subsystem_id: u16,
+    expansion_rom_base_address: u32,
+    capabilities_pointer: u8,
+    reserved_1: Reserved<3>,
+    reserved_2: Reserved<4>,
+    interrupt_line: u8,
+    interrupt_pin: u8,
+    min_gnt: u8,
+    max_lat: u8,
+}
+
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u16)]
+pub enum CommandRegisterFlag {
+    EnableIOSpaceAccesses = 1 << 0,
+    EnableMemorySpaceAccesses = 1 << 1,
+    AllowBehaveAsMaster = 1 << 2,
+    AllowSpecialCyclesOperationsMonitoring = 1 << 3,
+    EnableMemoryWriteAndInvalidate = 1 << 4,
+    EnableVGAPaletteSnooping = 1 << 5,
+    NormalResponseToParityErrors = 1 << 6,
+    AddressDataStepping = 1 << 7,
+    EnableSERRDriver = 1 << 8,
+    AllowFastBackToBackTransactionsToDifferentAgents = 1 << 9,
+}
+
+make_bitmap!(new_type: CommandRegister, underlying_flag_type: CommandRegisterFlag, repr: u16, bit_skipper: |i| i > 9);
+
+#[repr(u8)]
+pub enum DevSelTiming {
+    Fast,
+    Medium,
+    Slow,
+}
+
+#[repr(u16)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum DeviceStatusFlag {
+    HasNewCapabilitiesList = 1 << 4,
+    _66MHzCapable = 1 << 5,
+    CanAcceptFastBackToBackTransactionsToDifferentAgents = 1 << 7,
+    MasterDataParityError = 1 << 8,
+    TargetAbort = 1 << 11,
+    MasterTargetAbort = 1 << 12,
+    MasterAbort = 1 << 13,
+    SignaledSystemError = 1 << 14,
+    DetectedParityError = 1 << 15,
+}
+
+make_bitmap!(new_type: DeviceStatus, underlying_flag_type: DeviceStatusFlag, repr: u16, bit_skipper: |i| {i < 4 || i == 6 || i == 9 || i == 10});
+
+#[repr(u8)]
+#[derive(TryFromPrimitive)]
+pub enum MemoryBaseAddressRegisterType {
+    Anywhere32Bit = 0b00,
+    Anywhere64Bit = 0b10,
+}
+
+// 28 bits of base address (power of 2), prefetchable bit, 2-bit type, 0 bit
+pub struct MemoryBaseAddressRegister {
+    bits: u32,
+}
+
+// 30 bits of base address (power of 2), 0 reserved bit, 1 bit
+pub struct IOBaseAddressRegister {
+    bits: u32,
+}
+
+pub enum BaseAddressRegister {
+    Memory(MemoryBaseAddressRegister),
+    Io(IOBaseAddressRegister),
+}
+
+#[derive(Default)]
+pub struct EHCIControllers {
+    config_addr: ConfigAddressRegister,
+}
+
+impl ConfigAddressRegister {
+    pub fn set_register_offset(&mut self, register_number: u8) {
+        self.bits &= !(0x3f << 2);
+        self.bits |= register_number as u32 & (0x3f << 2);
+    }
+
+    pub fn set_function_number(&mut self, function_number: u8) {
+        bits::set_bits!(bits_expr: self.bits, value: function_number, n_bits: 3, starts_at_bit: 8, bits_expr_ty: u32);
+    }
+
+    pub fn set_device_number(&mut self, device_number: u8) {
+        bits::set_bits!(bits_expr: self.bits, value: device_number, n_bits: 5, starts_at_bit: 11, bits_expr_ty: u32);
+    }
+
+    pub fn set_bus_number(&mut self, bus_number: u8) {
+        bits::set_bits!(bits_expr: self.bits, value: bus_number, n_bits: 8, starts_at_bit: 16, bits_expr_ty: u32);
+    }
+
+    pub fn get_function_number(&self) -> u8 {
+        bits::get_bits!(bits_expr: self.bits, n_bits: 3, starts_at_bit: 8, return_ty: u8)
+    }
+
+    pub fn get_device_number(&self) -> u8 {
+        bits::get_bits!(bits_expr: self.bits, n_bits: 5, starts_at_bit: 11, return_ty: u8)
+    }
+
+    pub fn get_bus_number(&self) -> u8 {
+        bits::get_bits!(bits_expr: self.bits, n_bits: 8, starts_at_bit: 16, return_ty: u8)
+    }
+
+    pub fn read_dword(&mut self) -> u32 {
+        let config_address_port = Port::new(CONFIG_ADDRESS);
+        let config_data_port = Port::new(CONFIG_DATA);
+        self.set_flag(ConfigAddressRegisterFlag::Enable);
+
+        config_address_port.writed(self.bits);
+        config_data_port.readd()
+    }
+
+    pub fn write_dword(&mut self, dword: u32) {
+        let config_address_port = Port::new(CONFIG_ADDRESS);
+        let config_data_port = Port::new(CONFIG_DATA);
+        self.set_flag(ConfigAddressRegisterFlag::Enable);
+
+        config_address_port.writed(self.bits);
+        config_data_port.writed(dword);
+    }
+
+    pub fn dump_configuration_space_header(
+        &mut self,
+    ) -> Option<error::Result<ConfigurationSpaceHeader>> {
+        let mut bytes = [0u8; size_of::<ConfigurationSpaceHeader>()];
+        let mut offset = 0usize;
+        self.set_register_offset(offset as u8);
+        self.read_dword()
+            .to_le_bytes()
+            .write_to_prefix(&mut bytes[offset..])
+            .ok()?;
+        offset += 4;
+        if u16::from_le_bytes([bytes[0], bytes[1]]) == 0xff_ff {
+            return None;
+        }
+        while offset < bytes.len() {
+            self.set_register_offset(offset as u8);
+            self.read_dword()
+                .to_le_bytes()
+                .write_to_prefix(&mut bytes[offset..])
+                .ok()?;
+            offset += 4;
+        }
+        Some(ConfigurationSpaceHeader::try_from(bytes.as_slice()))
+    }
+}
+
+impl ConfigDataRegister {
+    pub fn set_value(&mut self, value: u32) {
+        self.bits &= 0x7f_ff_ff_ff;
+        self.bits |= value & 0x7f_ff_ff_ff;
+    }
+}
+
+impl ConfigurationSpaceHeaderVersion {
+    pub fn type0() -> Self {
+        Self { bits: 0 }
+    }
+
+    pub fn type1() -> Self {
+        Self { bits: 1 }
+    }
+
+    pub fn cardbus_bridge() -> Self {
+        Self { bits: 2 }
+    }
+}
+
+impl ConfigurationSpaceHeader {
+    /// # Panics
+    /// Will panic if proper validation wasn't made before creating an instance of
+    /// ConfigurationSpaceHeader
+    pub fn get_header_type(&self) -> HeaderType {
+        HeaderType::try_from(self.header_type & 0x7f)
+            .expect("header_type field did not contain a valid header type in its low bits")
+    }
+
+    fn try_get_class(&self) -> error::Result<Class> {
+        if self.base_class == 0x01 && self.subclass == 0x01 {
+            return Ok(Class::IDEController);
+        }
+        if self.base_class == 0x06 && self.subclass == 0x08 {
+            return Ok(Class::RACEwayBridge);
+        }
+
+        if self.base_class == 0x0e && self.subclass == 0x08 {
+            return Ok(Class::IntelligentIOController);
+        }
+
+        let class = (self.base_class as u32) << 16
+            | ((self.subclass as u32) << 8)
+            | (self.programming_interface as u32);
+        let invalid_class_error: error::Error = Fault::InvalidPCIClass(class).into();
+
+        if self.subclass == 0x80 {
+            match self.base_class {
+                0x01 => return Ok(Class::MassStorageController),
+                0x02 => return Ok(Class::OtherNetworkController),
+                0x03 => return Ok(Class::OtherDisplayController),
+                0x04 => return Ok(Class::OtherMultimediaDevice),
+                0x05 => return Ok(Class::OtherMemoryController),
+                0x06 => return Ok(Class::OtherBridgeDevice),
+                0x07 => return Ok(Class::OtherCommunicationsDevice),
+                0x08 => return Ok(Class::OtherSystemPeripheral),
+                0x09 => return Ok(Class::OtherInputController),
+                0x0a => return Ok(Class::OtherTypeDockingStation),
+                0x10 => return Ok(Class::OtherEnDecryption),
+                0x11 => return Ok(Class::OtherDataAcquisitionSignalProcessingController),
+                _ => {
+                    return Err(invalid_class_error);
+                }
+            }
+        }
+
+        class.try_into().map_err(|_| invalid_class_error)
+    }
+
+    /// # Panics
+    /// will panic if proper validation wasn't made before creating an instance of
+    /// ConfigurationSpaceHeader
+    pub fn get_class(&self) -> Class {
+        self.try_get_class()
+            .expect("an invalid class value was stored in self.class")
+    }
+
+    pub fn get_command(&self) -> CommandRegister {
+        CommandRegister::from(self.command)
+    }
+
+    pub fn get_status(&self) -> DeviceStatus {
+        DeviceStatus::from(self.status)
+    }
+
+    pub fn is_multi_function_device(&self) -> bool {
+        (ConfigurationSpaceHeaderVersion {
+            bits: self.header_type,
+        })
+        .is_set(ConfigurationSpaceHeaderVersionFlag::MultiFunctionDevice)
+    }
+
+    pub fn is_usb(&self) -> bool {
+        matches!(
+            self.get_class(),
+            Class::UHCIUsb
+                | Class::OHCIUsb
+                | Class::GenericUsb
+                | Class::UsbDevice
+                | Class::EHCIUsb
+                | Class::XHCIUsb
+        )
+    }
+
+    pub fn base_address_register_5(&self) -> u32 {
+        self.base_address_register_5
+    }
+
+    pub fn base_address_register_1(&self) -> u32 {
+        self.base_address_register_1
+    }
+}
+
+impl DeviceStatus {
+    pub fn set_devsel_timing(&mut self, devsel_timing: DevSelTiming) {
+        bits::set_bits!(bits_expr: self.bits, value: devsel_timing, n_bits: 2, starts_at_bit: 9, bits_expr_ty: u16);
+    }
+}
+
+impl MemoryBaseAddressRegister {
+    const PREFETCHABLE_MASK: u32 = 0b1;
+    const PREFETCHABLE_SHIFT: u32 = 0b11;
+    const TYPE_MASK: u32 = 1;
+    const TYPE_SHIFT: u32 = 0x3;
+
+    pub fn is_prefetchable(&self) -> bool {
+        (self.bits >> Self::PREFETCHABLE_SHIFT) & Self::PREFETCHABLE_MASK != 0
+    }
+
+    pub fn memory_addressing_type(&mut self) -> error::Result<MemoryBaseAddressRegisterType> {
+        (((self.bits >> Self::TYPE_SHIFT) & Self::TYPE_MASK) as u8)
+            .try_into()
+            .map_err(
+                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| -> error::Error {
+                    InvalidPCIMemoryAddressingType(err.number).into()
+                },
+            )
+    }
+}
+
+impl EHCIControllers {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn try_create_ehci_controller(
+        &mut self,
+        config_header: &ConfigurationSpaceHeader,
+        config_addr: ConfigAddressRegister,
+    ) -> Option<error::Result<ehci::Controller>> {
+        match config_header.get_class() {
+            Class::EHCIUsb => Some(usb::ehci::Controller::new(
+                config_header.base_address_register_1() & !0xf,
+                config_addr,
+            )),
+            Class::UHCIUsb
+            | Class::OHCIUsb
+            | Class::GenericUsb
+            | Class::UsbDevice
+            | Class::XHCIUsb => None,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<ConfigAddressRegister> for PciDevice {
+    fn from(value: ConfigAddressRegister) -> Self {
+        PciDevice::new(
+            value.get_bus_number(),
+            value.get_device_number(),
+            value.get_function_number(),
+        )
+    }
+}
+
+impl TryFrom<&[u8]> for ConfigurationSpaceHeader {
+    type Error = Error;
+
+    fn try_from(bytes: &[u8]) -> error::Result<Self> {
+        let configuration_space_header_raw = ConfigurationSpaceHeader::try_read_from_prefix(bytes)
+            .map(|(result, _rest)| result)
+            .map_err(convert_try_read_error)?;
+        let _ = HeaderType::try_from(configuration_space_header_raw.header_type & 0x7f)
+            .map_err(|err| -> error::Error { Fault::InvalidPCIHeaderType(err.number).into() })?;
+
+        let _ = configuration_space_header_raw.try_get_class()?;
+        Ok(configuration_space_header_raw)
+    }
+}
+
+impl From<u32> for BaseAddressRegister {
+    fn from(value: u32) -> Self {
+        match value & 0x1 {
+            0 => Self::Memory(MemoryBaseAddressRegister { bits: value }),
+            1 => Self::Io(IOBaseAddressRegister { bits: value }),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl core::fmt::Display for HeaderType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HeaderType::Type0 => write!(f, "Type 0 (Endpoints)"),
+            HeaderType::Type1 => write!(f, "Type 1 (PCI-to-PCI Bridge)"),
+            HeaderType::CardbusBridge => write!(f, "CardBus Bridge"),
+        }
+    }
 }
 
 impl core::fmt::Display for Class {
@@ -466,160 +749,6 @@ impl core::fmt::Display for Class {
     }
 }
 
-#[derive(TryFromBytes, Immutable, Debug, Clone, Copy)]
-pub struct Reserved<const N: usize>([u8; N]);
-
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug)]
-#[repr(C, packed)]
-pub struct ConfigurationSpaceHeader {
-    // REQUIRED
-    vendor_id: u16,
-    // REQUIRED
-    device_id: u16,
-    // REQUIRED
-    command: u16,
-    // REQUIRED
-    status: u16,
-    // REQUIRED
-    revision_id: u8,
-    // REQUIRED
-    programming_interface: u8,
-    // REQUIRED
-    subclass: u8,
-    // REQUIRED
-    base_class: u8,
-    cache_line_size: u8,
-    latency_timer: u8,
-    // REQUIRED
-    header_type: u8,
-    builtin_self_test: u8,
-    base_address_register_1: u32,
-    base_address_register_2: u32,
-    base_address_register_3: u32,
-    base_address_register_4: u32,
-    base_address_register_5: u32,
-    base_address_register_6: u32,
-    cardbus_cis_pointer: u32,
-    subsystem_vendor_id: u16,
-    subsystem_id: u16,
-    expansion_rom_base_address: u32,
-    capabilities_pointer: u8,
-    reserved_1: Reserved<3>,
-    reserved_2: Reserved<4>,
-    interrupt_line: u8,
-    interrupt_pin: u8,
-    min_gnt: u8,
-    max_lat: u8,
-}
-
-impl TryFrom<&[u8]> for ConfigurationSpaceHeader {
-    type Error = Error;
-
-    fn try_from(bytes: &[u8]) -> error::Result<Self> {
-        let configuration_space_header_raw = ConfigurationSpaceHeader::try_read_from_prefix(bytes)
-            .map(|(result, _rest)| result)
-            .map_err(convert_try_read_error)?;
-        let _ = HeaderType::try_from(configuration_space_header_raw.header_type & 0x7f)
-            .map_err(|err| -> error::Error { Fault::InvalidPCIHeaderType(err.number).into() })?;
-
-        let _ = configuration_space_header_raw.try_get_class()?;
-        Ok(configuration_space_header_raw)
-    }
-}
-
-impl ConfigurationSpaceHeader {
-    /// # Panics
-    /// Will panic if proper validation wasn't made before creating an instance of
-    /// ConfigurationSpaceHeader
-    pub fn get_header_type(&self) -> HeaderType {
-        HeaderType::try_from(self.header_type & 0x7f)
-            .expect("header_type field did not contain a valid header type in its low bits")
-    }
-
-    fn try_get_class(&self) -> error::Result<Class> {
-        if self.base_class == 0x01 && self.subclass == 0x01 {
-            return Ok(Class::IDEController);
-        }
-        if self.base_class == 0x06 && self.subclass == 0x08 {
-            return Ok(Class::RACEwayBridge);
-        }
-
-        if self.base_class == 0x0e && self.subclass == 0x08 {
-            return Ok(Class::IntelligentIOController);
-        }
-
-        let class = (self.base_class as u32) << 16
-            | ((self.subclass as u32) << 8)
-            | (self.programming_interface as u32);
-        let invalid_class_error: error::Error = Fault::InvalidPCIClass(class).into();
-
-        if self.subclass == 0x80 {
-            match self.base_class {
-                0x01 => return Ok(Class::MassStorageController),
-                0x02 => return Ok(Class::OtherNetworkController),
-                0x03 => return Ok(Class::OtherDisplayController),
-                0x04 => return Ok(Class::OtherMultimediaDevice),
-                0x05 => return Ok(Class::OtherMemoryController),
-                0x06 => return Ok(Class::OtherBridgeDevice),
-                0x07 => return Ok(Class::OtherCommunicationsDevice),
-                0x08 => return Ok(Class::OtherSystemPeripheral),
-                0x09 => return Ok(Class::OtherInputController),
-                0x0a => return Ok(Class::OtherTypeDockingStation),
-                0x10 => return Ok(Class::OtherEnDecryption),
-                0x11 => return Ok(Class::OtherDataAcquisitionSignalProcessingController),
-                _ => {
-                    return Err(invalid_class_error);
-                }
-            }
-        }
-
-        class.try_into().map_err(|_| invalid_class_error)
-    }
-
-    /// # Panics
-    /// will panic if proper validation wasn't made before creating an instance of
-    /// ConfigurationSpaceHeader
-    pub fn get_class(&self) -> Class {
-        self.try_get_class()
-            .expect("an invalid class value was stored in self.class")
-    }
-
-    pub fn get_command(&self) -> CommandRegister {
-        CommandRegister::from(self.command)
-    }
-
-    pub fn get_status(&self) -> DeviceStatus {
-        DeviceStatus::from(self.status)
-    }
-
-    pub fn is_multi_function_device(&self) -> bool {
-        (ConfigurationSpaceHeaderVersion {
-            bits: self.header_type,
-        })
-        .is_set(ConfigurationSpaceHeaderVersionFlag::MultiFunctionDevice)
-    }
-
-    pub fn is_usb(&self) -> bool {
-        matches!(
-            self.get_class(),
-            Class::UHCIUsb
-                | Class::OHCIUsb
-                | Class::GenericUsb
-                | Class::UsbDevice
-                | Class::EHCIUsb
-                | Class::XHCIUsb
-        )
-    }
-
-    pub fn base_address_register_5(&self) -> u32 {
-        self.base_address_register_5
-    }
-
-    pub fn base_address_register_1(&self) -> u32 {
-        self.base_address_register_1
-    }
-}
-
 impl core::fmt::Display for ConfigurationSpaceHeader {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(f, "Vendor ID: {:x}", { self.vendor_id })?;
@@ -659,21 +788,6 @@ impl core::fmt::Display for ConfigurationSpaceHeader {
     }
 }
 
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u16)]
-pub enum CommandRegisterFlag {
-    EnableIOSpaceAccesses = 1 << 0,
-    EnableMemorySpaceAccesses = 1 << 1,
-    AllowBehaveAsMaster = 1 << 2,
-    AllowSpecialCyclesOperationsMonitoring = 1 << 3,
-    EnableMemoryWriteAndInvalidate = 1 << 4,
-    EnableVGAPaletteSnooping = 1 << 5,
-    NormalResponseToParityErrors = 1 << 6,
-    AddressDataStepping = 1 << 7,
-    EnableSERRDriver = 1 << 8,
-    AllowFastBackToBackTransactionsToDifferentAgents = 1 << 9,
-}
-
 impl core::fmt::Display for CommandRegisterFlag {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -708,29 +822,6 @@ impl core::fmt::Display for CommandRegisterFlag {
     }
 }
 
-make_bitmap!(new_type: CommandRegister, underlying_flag_type: CommandRegisterFlag, repr: u16, bit_skipper: |i| i > 9);
-
-#[repr(u8)]
-pub enum DevSelTiming {
-    Fast,
-    Medium,
-    Slow,
-}
-
-#[repr(u16)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum DeviceStatusFlag {
-    HasNewCapabilitiesList = 1 << 4,
-    _66MHzCapable = 1 << 5,
-    CanAcceptFastBackToBackTransactionsToDifferentAgents = 1 << 7,
-    MasterDataParityError = 1 << 8,
-    TargetAbort = 1 << 11,
-    MasterTargetAbort = 1 << 12,
-    MasterAbort = 1 << 13,
-    SignaledSystemError = 1 << 14,
-    DetectedParityError = 1 << 15,
-}
-
 impl core::fmt::Display for DeviceStatusFlag {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -750,97 +841,6 @@ impl core::fmt::Display for DeviceStatusFlag {
             DeviceStatusFlag::MasterAbort => write!(f, "Master Abort"),
             DeviceStatusFlag::SignaledSystemError => write!(f, "Signaled System Error"),
             DeviceStatusFlag::DetectedParityError => write!(f, "Detected Parity Error"),
-        }
-    }
-}
-
-make_bitmap!(new_type: DeviceStatus, underlying_flag_type: DeviceStatusFlag, repr: u16, bit_skipper: |i| {i < 4 || i == 6 || i == 9 || i == 10});
-
-impl DeviceStatus {
-    pub fn set_devsel_timing(&mut self, devsel_timing: DevSelTiming) {
-        bits::set_bits!(bits_expr: self.bits, value: devsel_timing, n_bits: 2, starts_at_bit: 9, bits_expr_ty: u16);
-    }
-}
-
-#[repr(u8)]
-#[derive(TryFromPrimitive)]
-pub enum MemoryBaseAddressRegisterType {
-    Anywhere32Bit = 0b00,
-    Anywhere64Bit = 0b10,
-}
-
-// 28 bits of base address (power of 2), prefetchable bit, 2-bit type, 0 bit
-pub struct MemoryBaseAddressRegister {
-    bits: u32,
-}
-
-impl MemoryBaseAddressRegister {
-    const PREFETCHABLE_MASK: u32 = 0b1;
-    const PREFETCHABLE_SHIFT: u32 = 0b11;
-    const TYPE_SHIFT: u32 = 0x3;
-    const TYPE_MASK: u32 = 1;
-
-    pub fn is_prefetchable(&self) -> bool {
-        (self.bits >> Self::PREFETCHABLE_SHIFT) & Self::PREFETCHABLE_MASK != 0
-    }
-
-    pub fn memory_addressing_type(&mut self) -> error::Result<MemoryBaseAddressRegisterType> {
-        (((self.bits >> Self::TYPE_SHIFT) & Self::TYPE_MASK) as u8)
-            .try_into()
-            .map_err(
-                |err: num_enum::TryFromPrimitiveError<MemoryBaseAddressRegisterType>| -> error::Error {
-                    InvalidPCIMemoryAddressingType(err.number).into()
-                },
-            )
-    }
-}
-
-// 30 bits of base address (power of 2), 0 reserved bit, 1 bit
-pub struct IOBaseAddressRegister {
-    bits: u32,
-}
-
-pub enum BaseAddressRegister {
-    Memory(MemoryBaseAddressRegister),
-    Io(IOBaseAddressRegister),
-}
-
-impl From<u32> for BaseAddressRegister {
-    fn from(value: u32) -> Self {
-        match value & 0x1 {
-            0 => Self::Memory(MemoryBaseAddressRegister { bits: value }),
-            1 => Self::Io(IOBaseAddressRegister { bits: value }),
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct EHCIControllers {
-    config_addr: ConfigAddressRegister,
-}
-
-impl EHCIControllers {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    fn try_create_ehci_controller(
-        &mut self,
-        config_header: &ConfigurationSpaceHeader,
-        config_addr: ConfigAddressRegister,
-    ) -> Option<error::Result<ehci::Controller>> {
-        match config_header.get_class() {
-            Class::EHCIUsb => Some(usb::ehci::Controller::new(
-                config_header.base_address_register_1() & !0xf,
-                config_addr,
-            )),
-            Class::UHCIUsb
-            | Class::OHCIUsb
-            | Class::GenericUsb
-            | Class::UsbDevice
-            | Class::XHCIUsb => None,
-            _ => unreachable!(),
         }
     }
 }

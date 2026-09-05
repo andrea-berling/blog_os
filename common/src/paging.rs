@@ -56,55 +56,39 @@ pub enum ExtendedProcessorSignatureAndFeatureBit {
 
 make_bitmap!(new_type: ExtendedProcessorSignatureAndFeatures, underlying_flag_type: ExtendedProcessorSignatureAndFeatureBit, repr: u32, nodisplay);
 
-const LINEAR_PHYSICAL_ADDRESS_SIZE: u32 = 0x80000008;
-const EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS: u32 = 0x80000001;
-
-fn get_max_physical_address_width() -> u8 {
-    // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
-    __cpuid(LINEAR_PHYSICAL_ADDRESS_SIZE).eax as u8
-}
-
-fn supports_1gb_pages() -> bool {
-    // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
-    let result = __cpuid(EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS).edx;
-
-    ExtendedProcessorSignatureAndFeatures::from(result)
-        .is_set(ExtendedProcessorSignatureAndFeatureBit::_1GBPagesAvailable)
-}
-
-macro_rules! impl_deref_to_page_table_entry {
-    ($type:ty) => {
-        impl core::ops::Deref for $type {
-            type Target = PageTableEntry;
-
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-
-        impl core::ops::DerefMut for $type {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.0
-            }
-        }
-    };
-}
-
 #[derive(Clone)]
 pub struct PML4Entry(PageTableEntry);
-
-impl_deref_to_page_table_entry!(PML4Entry);
 
 #[repr(align(4096))]
 pub struct PML4 {
     pub entries: [PML4Entry; 512],
 }
 
-impl Default for PML4 {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Clone)]
+pub struct PageDirectoryPointerTableEntry(PageTableEntry);
+
+pub struct _1GPage(*const u8);
+
+#[repr(align(4096))]
+pub struct PageDirectoryPointerTable {
+    pub entries: [PageDirectoryPointerTableEntry; 512],
 }
+
+#[derive(Clone)]
+pub struct PageDirectoryEntry(PageTableEntry);
+
+#[repr(align(4096))]
+pub struct PageDirectoryTable([PageDirectoryEntry; 512]);
+
+#[repr(align(4096))]
+pub struct _4KPage([u8; 0x4096]);
+
+#[repr(align(4096))]
+pub struct PageTable([PageTableEntry; 512]);
+
+const LINEAR_PHYSICAL_ADDRESS_SIZE: u32 = 0x80000008;
+const EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS: u32 = 0x80000001;
+const ADDRESS_CLEAR_MASK: u64 = !0x7_ffff_ffff_f000;
 
 impl PML4 {
     pub const fn new() -> Self {
@@ -113,8 +97,6 @@ impl PML4 {
         }
     }
 }
-
-const ADDRESS_CLEAR_MASK: u64 = !0x7_ffff_ffff_f000;
 
 impl PML4Entry {
     pub const fn new() -> Self {
@@ -127,30 +109,6 @@ impl PML4Entry {
         let addr = (pdpt as *const _ as u64) & ((1u64 << max_width) - 1);
         self.0.bits &= ADDRESS_CLEAR_MASK;
         self.0.bits |= addr;
-    }
-}
-
-impl Default for PML4Entry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone)]
-pub struct PageDirectoryPointerTableEntry(PageTableEntry);
-
-impl_deref_to_page_table_entry!(PageDirectoryPointerTableEntry);
-
-pub struct _1GPage(*const u8);
-
-impl TryFrom<*const u8> for _1GPage {
-    type Error = error::Error;
-
-    fn try_from(bytes: *const u8) -> error::Result<Self> {
-        if !supports_1gb_pages() {
-            return Err(Fault::UnsupportedFeature(Feature::_1GBPages).into());
-        }
-        Ok(Self(bytes))
     }
 }
 
@@ -177,17 +135,6 @@ impl PageDirectoryPointerTableEntry {
     }
 }
 
-impl Default for PageDirectoryPointerTableEntry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[repr(align(4096))]
-pub struct PageDirectoryPointerTable {
-    pub entries: [PageDirectoryPointerTableEntry; 512],
-}
-
 impl PageDirectoryPointerTable {
     pub const fn new() -> Self {
         Self {
@@ -195,17 +142,6 @@ impl PageDirectoryPointerTable {
         }
     }
 }
-
-impl Default for PageDirectoryPointerTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone)]
-pub struct PageDirectoryEntry(PageTableEntry);
-
-impl_deref_to_page_table_entry!(PageDirectoryEntry);
 
 impl PageDirectoryEntry {
     pub fn set_physical_address(&mut self, page: *const u8) {
@@ -226,12 +162,6 @@ impl PageDirectoryEntry {
     }
 }
 
-#[repr(align(4096))]
-pub struct PageDirectoryTable([PageDirectoryEntry; 512]);
-
-#[repr(align(4096))]
-pub struct _4KPage([u8; 0x4096]);
-
 impl PageTableEntry {
     /// Set the address of the pointee
     /// The pointee must be the physical address of a 4K mapped page
@@ -245,8 +175,77 @@ impl PageTableEntry {
     }
 }
 
-#[repr(align(4096))]
-pub struct PageTable([PageTableEntry; 512]);
+macro_rules! impl_deref_to_page_table_entry {
+    ($type:ty) => {
+        impl core::ops::Deref for $type {
+            type Target = PageTableEntry;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl core::ops::DerefMut for $type {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+    };
+}
+
+impl TryFrom<*const u8> for _1GPage {
+    type Error = error::Error;
+
+    fn try_from(bytes: *const u8) -> error::Result<Self> {
+        if !supports_1gb_pages() {
+            return Err(Fault::UnsupportedFeature(Feature::_1GBPages).into());
+        }
+        Ok(Self(bytes))
+    }
+}
+
+impl_deref_to_page_table_entry!(PML4Entry);
+
+impl_deref_to_page_table_entry!(PageDirectoryPointerTableEntry);
+
+impl_deref_to_page_table_entry!(PageDirectoryEntry);
+
+impl Default for PML4 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for PML4Entry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for PageDirectoryPointerTableEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for PageDirectoryPointerTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn get_max_physical_address_width() -> u8 {
+    // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
+    __cpuid(LINEAR_PHYSICAL_ADDRESS_SIZE).eax as u8
+}
+
+fn supports_1gb_pages() -> bool {
+    // SAFETY: The `__cpuid` instruction is safe to call with the given arguments.
+    let result = __cpuid(EXTENDED_PROCESSOR_SIGNATURE_AND_FEATURE_BITS).edx;
+
+    ExtendedProcessorSignatureAndFeatures::from(result)
+        .is_set(ExtendedProcessorSignatureAndFeatureBit::_1GBPagesAvailable)
+}
 
 #[cfg(test)]
 mod tests {
@@ -258,6 +257,8 @@ mod tests {
         pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().expect("TODO"));
         pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
+        // SAFETY: the entry types are plain-old-data; transmuting to bytes only to
+        // assert the exact wire layout.
         assert_eq!(&[0x83, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,], unsafe {
             core::mem::transmute::<_, &[u8; 8]>(&pdpt.entries[0])
         });
@@ -280,6 +281,8 @@ mod tests {
                 0x0,
                 0x0,
             ],
+            // SAFETY: the entry types are plain-old-data; transmuting to bytes only to
+            // assert the exact wire layout.
             unsafe { core::mem::transmute::<_, [u8; 8]>(pml4_entry) }
         );
     }

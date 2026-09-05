@@ -59,6 +59,15 @@ pub struct StaticBundle {
     buffers: StaticBuffersVec,
 }
 
+pub struct StaticBundleAllocator {
+    free_qh_bitmap: SmallBitSet<QueueHeadIndex>,
+    queue_heads: &'static mut [BlankQueueHead],
+    free_qtd_bitmap: SmallBitSet<QueueTransferDescriptorIndex>,
+    queue_transfer_descriptors: &'static mut [BlankQueueTransferDescriptor],
+    free_buffers_bitmap: SmallBitSet<BufferIndexNoOffset>,
+    buffers: &'static mut [BufferPage],
+}
+
 impl StaticBundle {
     /// Logically links the horizontal link of the queue head at `from` to the queue head
     /// at `to`. Passing `None` terminates the link. The physical pointer is resolved by
@@ -393,26 +402,6 @@ impl StaticBundle {
     }
 }
 
-impl Drop for StaticBundle {
-    fn drop(&mut self) {
-        // SAFETY: there is no other thread of execution than the main one, so the global
-        // allocator is not being concurrently accessed
-        #[allow(static_mut_refs)]
-        unsafe {
-            GLOBAL_BUNDLE_ALLOCATOR.free_bundle(self)
-        };
-    }
-}
-
-pub struct StaticBundleAllocator {
-    free_qh_bitmap: SmallBitSet<QueueHeadIndex>,
-    queue_heads: &'static mut [BlankQueueHead],
-    free_qtd_bitmap: SmallBitSet<QueueTransferDescriptorIndex>,
-    queue_transfer_descriptors: &'static mut [BlankQueueTransferDescriptor],
-    free_buffers_bitmap: SmallBitSet<BufferIndexNoOffset>,
-    buffers: &'static mut [BufferPage],
-}
-
 impl StaticBundleAllocator {
     pub fn allocate(&mut self, request: AllocationRequest) -> error::Result<StaticBundle> {
         let mut queue_heads: StaticQueueHeadsVec = ArrayVec::new();
@@ -509,6 +498,25 @@ impl StaticBundleAllocator {
     }
 }
 
+impl Drop for StaticBundle {
+    fn drop(&mut self) {
+        // SAFETY: there is no other thread of execution than the main one, so the global
+        // allocator is not being concurrently accessed
+        #[allow(static_mut_refs)]
+        unsafe {
+            GLOBAL_BUNDLE_ALLOCATOR.free_bundle(self)
+        };
+    }
+}
+
+pub fn allocate_static_bundle(request: AllocationRequest) -> error::Result<StaticBundle> {
+    // SAFETY: No threads, no problem
+    unsafe {
+        #[allow(static_mut_refs)]
+        GLOBAL_BUNDLE_ALLOCATOR.allocate(request)
+    }
+}
+
 #[allow(static_mut_refs)]
 static mut GLOBAL_BUNDLE_ALLOCATOR: StaticBundleAllocator = const {
     StaticBundleAllocator {
@@ -540,11 +548,3 @@ static mut GLOBAL_BUNDLE_ALLOCATOR: StaticBundleAllocator = const {
         buffers: unsafe { &mut transfer_descriptor::BLANK_BUFFER_PAGES },
     }
 };
-
-pub fn allocate_static_bundle(request: AllocationRequest) -> error::Result<StaticBundle> {
-    // SAFETY: No threads, no problem
-    unsafe {
-        #[allow(static_mut_refs)]
-        GLOBAL_BUNDLE_ALLOCATOR.allocate(request)
-    }
-}

@@ -40,17 +40,78 @@ pub struct GDTDescriptor {
     address: u32,
 }
 
-impl<const N: usize> From<&'static GDT<N>> for GDTDescriptor {
-    fn from(value: &'static GDT<N>) -> Self {
-        Self {
-            address: value as *const _ as u32,
-            size: size_of::<GDT<N>>() as u16 - 1,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct SegmentDescriptorFlags(u16);
+
+#[allow(unused)]
+#[repr(u16)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum DataSegmentDescriptorBit {
+    Accessed = 1 << 0,
+    Writable = 1 << 1,
+    ExpandsDown = 1 << 2,
+    Present = 1 << 7,
+    Available = 1 << 12,
+    LongMode = 1 << 13,
+    Big = 1 << 14,
+    SegmentLimitHas4KGranularity = 1 << 15,
+}
+
+make_bitmap!(new_type: DataSegmentDescriptorFlags, underlying_flag_type: DataSegmentDescriptorBit, repr: u16, nodisplay);
+
+#[allow(unused)]
+#[repr(u16)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum CodeSegmentDescriptorBit {
+    Accessed = 1 << 0,
+    Readable = 1 << 1,
+    Conforming = 1 << 2,
+    Present = 1 << 7,
+    Available = 1 << 12,
+    LongMode = 1 << 13,
+    DefaultOperandLengthIs32Bit = 1 << 14,
+    SegmentLimitHas4KGranularity = 1 << 15,
+}
+
+make_bitmap!(new_type: CodeSegmentDescriptorFlags, underlying_flag_type: CodeSegmentDescriptorBit, repr: u16, nodisplay);
+
+#[allow(unused)]
+#[repr(u16)]
+#[derive(TryFromPrimitive, Clone, Copy)]
+pub enum TaskSegmentDescriptorBit {
+    Present = 1 << 7,
+    LongMode = 1 << 13,
+    SegmentLimitHas4KGranularity = 1 << 15,
+}
+
+make_bitmap!(new_type: TaskSegmentDescriptorFlags, underlying_flag_type: TaskSegmentDescriptorBit, repr: u16, nodisplay);
+
+#[repr(u8)]
+enum SegmentType {
+    Data = 0b10,
+    Code = 0b11,
+}
+
+pub enum SegmentKind {
+    Code,
+    Data,
+}
+
+enum SegmentFlags {
+    Code(CodeSegmentDescriptorFlags),
+    Data(DataSegmentDescriptorFlags),
+    Task(TaskSegmentDescriptorFlags),
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct SegmentDescriptor {
+    segment_limit_lo: u16,
+    base_low: u16,
+    base_mid: u8,
+    flags: SegmentDescriptorFlags,
+    base_hi: u8,
+}
 
 impl SegmentDescriptorFlags {
     pub fn set_present(&mut self) {
@@ -75,99 +136,6 @@ impl SegmentDescriptorFlags {
         let mut flags = SegmentFlags::from(self.0);
         flags.set_limit_hi(limit_hi);
         *self = flags.into();
-    }
-}
-
-impl From<SegmentFlags> for SegmentDescriptorFlags {
-    fn from(value: SegmentFlags) -> Self {
-        match value {
-            SegmentFlags::Code(code_segment_descriptor_flags) => {
-                Self(u16::from(code_segment_descriptor_flags))
-            }
-            SegmentFlags::Data(data_segment_descriptor_flags) => {
-                Self(u16::from(data_segment_descriptor_flags))
-            }
-            SegmentFlags::Task(task_segment_descriptor_flags) => {
-                Self(u16::from(task_segment_descriptor_flags))
-            }
-        }
-    }
-}
-
-#[allow(unused)]
-#[repr(u16)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum DataSegmentDescriptorBit {
-    Accessed = 1 << 0,
-    Writable = 1 << 1,
-    ExpandsDown = 1 << 2,
-    Present = 1 << 7,
-    Available = 1 << 12,
-    LongMode = 1 << 13,
-    Big = 1 << 14,
-    SegmentLimitHas4KGranularity = 1 << 15,
-}
-
-make_bitmap!(new_type: DataSegmentDescriptorFlags, underlying_flag_type: DataSegmentDescriptorBit, repr: u16, nodisplay);
-impl_descriptor_ops!(DataSegmentDescriptorFlags);
-
-#[allow(unused)]
-#[repr(u16)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum CodeSegmentDescriptorBit {
-    Accessed = 1 << 0,
-    Readable = 1 << 1,
-    Conforming = 1 << 2,
-    Present = 1 << 7,
-    Available = 1 << 12,
-    LongMode = 1 << 13,
-    DefaultOperandLengthIs32Bit = 1 << 14,
-    SegmentLimitHas4KGranularity = 1 << 15,
-}
-
-make_bitmap!(new_type: CodeSegmentDescriptorFlags, underlying_flag_type: CodeSegmentDescriptorBit, repr: u16, nodisplay);
-impl_descriptor_ops!(CodeSegmentDescriptorFlags);
-
-#[allow(unused)]
-#[repr(u16)]
-#[derive(TryFromPrimitive, Clone, Copy)]
-pub enum TaskSegmentDescriptorBit {
-    Present = 1 << 7,
-    LongMode = 1 << 13,
-    SegmentLimitHas4KGranularity = 1 << 15,
-}
-
-make_bitmap!(new_type: TaskSegmentDescriptorFlags, underlying_flag_type: TaskSegmentDescriptorBit, repr: u16, nodisplay);
-impl_descriptor_ops!(TaskSegmentDescriptorFlags);
-
-#[repr(u8)]
-enum SegmentType {
-    Data = 0b10,
-    Code = 0b11,
-}
-
-pub enum SegmentKind {
-    Code,
-    Data,
-}
-
-enum SegmentFlags {
-    Code(CodeSegmentDescriptorFlags),
-    Data(DataSegmentDescriptorFlags),
-    Task(TaskSegmentDescriptorFlags),
-}
-
-impl From<u16> for SegmentFlags {
-    fn from(value: u16) -> Self {
-        match (value >> 3) & 0x3 {
-            b if b == (SegmentType::Data as u16) => {
-                Self::Data(DataSegmentDescriptorFlags { bits: value })
-            }
-            b if b == (SegmentType::Code as u16) => {
-                Self::Code(CodeSegmentDescriptorFlags { bits: value })
-            }
-            _ => Self::Task(TaskSegmentDescriptorFlags { bits: value }),
-        }
     }
 }
 
@@ -258,16 +226,6 @@ impl SegmentFlags {
             }
         }
     }
-}
-
-#[repr(C, packed)]
-#[derive(Clone, Copy, Debug)]
-pub struct SegmentDescriptor {
-    segment_limit_lo: u16,
-    base_low: u16,
-    base_mid: u8,
-    flags: SegmentDescriptorFlags,
-    base_hi: u8,
 }
 
 impl SegmentDescriptor {
@@ -382,6 +340,51 @@ impl SegmentDescriptor {
     }
 }
 
+impl<const N: usize> From<&'static GDT<N>> for GDTDescriptor {
+    fn from(value: &'static GDT<N>) -> Self {
+        Self {
+            address: value as *const _ as u32,
+            size: size_of::<GDT<N>>() as u16 - 1,
+        }
+    }
+}
+
+impl From<SegmentFlags> for SegmentDescriptorFlags {
+    fn from(value: SegmentFlags) -> Self {
+        match value {
+            SegmentFlags::Code(code_segment_descriptor_flags) => {
+                Self(u16::from(code_segment_descriptor_flags))
+            }
+            SegmentFlags::Data(data_segment_descriptor_flags) => {
+                Self(u16::from(data_segment_descriptor_flags))
+            }
+            SegmentFlags::Task(task_segment_descriptor_flags) => {
+                Self(u16::from(task_segment_descriptor_flags))
+            }
+        }
+    }
+}
+
+impl From<u16> for SegmentFlags {
+    fn from(value: u16) -> Self {
+        match (value >> 3) & 0x3 {
+            b if b == (SegmentType::Data as u16) => {
+                Self::Data(DataSegmentDescriptorFlags { bits: value })
+            }
+            b if b == (SegmentType::Code as u16) => {
+                Self::Code(CodeSegmentDescriptorFlags { bits: value })
+            }
+            _ => Self::Task(TaskSegmentDescriptorFlags { bits: value }),
+        }
+    }
+}
+
+impl_descriptor_ops!(DataSegmentDescriptorFlags);
+
+impl_descriptor_ops!(CodeSegmentDescriptorFlags);
+
+impl_descriptor_ops!(TaskSegmentDescriptorFlags);
+
 #[cfg(test)]
 mod tests {
     use crate::gdt::{self, SegmentDescriptor};
@@ -389,10 +392,14 @@ mod tests {
     #[test]
     fn flat_32bit() {
         let code_segment = SegmentDescriptor::new_flat(gdt::SegmentKind::Code, false);
+        // SAFETY: `SegmentDescriptor` is a plain-old-data type; transmuting it to its
+        // 8-byte representation only to assert the exact wire layout.
         assert_eq!([0xff, 0xff, 0, 0, 0, 0x9a, 0xcf, 0], unsafe {
             core::mem::transmute::<SegmentDescriptor, [u8; 8]>(code_segment)
         });
         let data_segment = SegmentDescriptor::new_flat(gdt::SegmentKind::Data, false);
+        // SAFETY: `SegmentDescriptor` is a plain-old-data type; transmuting it to its
+        // 8-byte representation only to assert the exact wire layout.
         assert_eq!([0xff, 0xff, 0, 0, 0, 0x92, 0xcf, 0], unsafe {
             core::mem::transmute::<SegmentDescriptor, [u8; 8]>(data_segment)
         });
@@ -401,10 +408,14 @@ mod tests {
     #[test]
     fn flat_64bit() {
         let code_segment = SegmentDescriptor::new_flat(gdt::SegmentKind::Code, true);
+        // SAFETY: `SegmentDescriptor` is a plain-old-data type; transmuting it to its
+        // 8-byte representation only to assert the exact wire layout.
         assert_eq!([0xff, 0xff, 0, 0, 0, 0x9a, 0xaf, 0], unsafe {
             core::mem::transmute::<SegmentDescriptor, [u8; 8]>(code_segment)
         });
         let data_segment = SegmentDescriptor::new_flat(gdt::SegmentKind::Data, true);
+        // SAFETY: `SegmentDescriptor` is a plain-old-data type; transmuting it to its
+        // 8-byte representation only to assert the exact wire layout.
         assert_eq!([0xff, 0xff, 0, 0, 0, 0x92, 0xcf, 0], unsafe {
             core::mem::transmute::<SegmentDescriptor, [u8; 8]>(data_segment)
         });

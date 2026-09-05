@@ -8,15 +8,6 @@ pub enum SelectorBit {
 
 make_bitmap!(new_type: Selector, underlying_flag_type: SelectorBit, repr: u8, nodisplay);
 
-impl Selector {
-    pub fn with_index(index: u8) -> Self {
-        let mut result = Self::empty();
-        result.bits &= 0x7;
-        result.bits |= index << 3;
-        result
-    }
-}
-
 #[derive(Default, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct TaskStateSegment {
@@ -64,6 +55,15 @@ pub struct TaskStateSegment {
 
 #[repr(align(16))]
 pub struct Stack<const SIZE: usize>([u8; SIZE]);
+
+impl Selector {
+    pub fn with_index(index: u8) -> Self {
+        let mut result = Self::empty();
+        result.bits &= 0x7;
+        result.bits |= index << 3;
+        result
+    }
+}
 
 impl<const SIZE: usize> Stack<SIZE> {
     pub const fn new(backing_buffer: [u8; SIZE]) -> Self {
@@ -116,6 +116,7 @@ impl TaskStateSegment {
             ssp: 0,
         }
     }
+
     pub fn with_ss0_stack<const N: usize>(segment: u16, stack: &Stack<N>) -> Self {
         Self {
             // NOTE: better explode here than using `as` and silently proceeding
@@ -259,6 +260,8 @@ mod tests {
                 0,
                 0
             ],
+            // SAFETY: `TaskStateSegment` is plain-old-data; transmuting to its byte
+            // representation only to assert the exact wire layout.
             unsafe { core::mem::transmute::<tss::TaskStateSegment, [u8; 108]>(tss) }
         );
 
@@ -285,6 +288,8 @@ mod tests {
                 0,
                 (tss_addr >> 24) as u8
             ],
+            // SAFETY: `SegmentDescriptor` is plain-old-data; transmuting to its byte
+            // representation only to assert the exact wire layout.
             unsafe { core::mem::transmute::<gdt::SegmentDescriptor, [u8; 8]>(tss_descriptor) }
         );
     }

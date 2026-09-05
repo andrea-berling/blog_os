@@ -9,33 +9,12 @@ pub struct IDTDescriptor {
     address: u32,
 }
 
-impl IDTDescriptor {
-    pub fn new(size: u16, address: u32) -> Self {
-        Self { size, address }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct GateDescriptor(u64);
-
-impl GateDescriptor {
-    pub const fn blank() -> Self {
-        Self(0)
-    }
-}
 
 pub const STANDARD_VECTOR_TABLE_SIZE: usize = 256;
 
 pub type IDT<const N: usize> = [GateDescriptor; N];
-
-impl<const N: usize> From<&IDT<N>> for IDTDescriptor {
-    fn from(value: &IDT<N>) -> Self {
-        Self {
-            address: value.as_ptr() as u32,
-            size: size_of::<IDT<N>>() as u16 - 1,
-        }
-    }
-}
 
 #[repr(u8)]
 pub enum Interrupt {
@@ -74,18 +53,60 @@ pub enum GateDescriptorBit {
 
 make_bitmap!(new_type: GateDescriptorFlags, underlying_flag_type: GateDescriptorBit, repr: u16, nodisplay);
 
-impl GateDescriptorFlags {
-    pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
-        bits::set_bits!(bits_expr: self.bits, value: privilege_level, n_bits: 2, starts_at_bit: 12, bits_expr_ty: u16);
-    }
-}
-
 #[repr(C, packed)]
 pub struct InterruptGateDescriptor {
     offset_low: u16,
     segment_selector: u16,
     flags: GateDescriptorFlags,
     offset_hi: u16,
+}
+
+impl IDTDescriptor {
+    pub fn new(size: u16, address: u32) -> Self {
+        Self { size, address }
+    }
+}
+
+impl GateDescriptor {
+    pub const fn blank() -> Self {
+        Self(0)
+    }
+}
+
+impl GateDescriptorFlags {
+    pub fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
+        bits::set_bits!(bits_expr: self.bits, value: privilege_level, n_bits: 2, starts_at_bit: 12, bits_expr_ty: u16);
+    }
+}
+
+impl InterruptGateDescriptor {
+    pub fn with_address_and_segment_selector(address: u32, segment_selector: u16) -> Self {
+        Self {
+            offset_hi: (address >> 16) as u16,
+            segment_selector,
+            offset_low: address as u16,
+            ..Default::default()
+        }
+    }
+}
+
+impl<const N: usize> From<&IDT<N>> for IDTDescriptor {
+    fn from(value: &IDT<N>) -> Self {
+        Self {
+            address: value.as_ptr() as u32,
+            size: size_of::<IDT<N>>() as u16 - 1,
+        }
+    }
+}
+
+impl From<InterruptGateDescriptor> for GateDescriptor {
+    fn from(value: InterruptGateDescriptor) -> Self {
+        GateDescriptor(
+            // SAFETY: `InterruptGateDescriptor` is a `#[repr(C, packed)]` struct with the same
+            // size as a `u64`, so this is safe.
+            unsafe { transmute::<InterruptGateDescriptor, u64>(value) },
+        )
+    }
 }
 
 impl Default for InterruptGateDescriptor {
@@ -101,27 +122,6 @@ impl Default for InterruptGateDescriptor {
             flags,
             segment_selector: Default::default(),
             offset_low: Default::default(),
-        }
-    }
-}
-
-impl From<InterruptGateDescriptor> for GateDescriptor {
-    fn from(value: InterruptGateDescriptor) -> Self {
-        GateDescriptor(
-            // SAFETY: `InterruptGateDescriptor` is a `#[repr(C, packed)]` struct with the same
-            // size as a `u64`, so this is safe.
-            unsafe { transmute::<InterruptGateDescriptor, u64>(value) },
-        )
-    }
-}
-
-impl InterruptGateDescriptor {
-    pub fn with_address_and_segment_selector(address: u32, segment_selector: u16) -> Self {
-        Self {
-            offset_hi: (address >> 16) as u16,
-            segment_selector,
-            offset_low: address as u16,
-            ..Default::default()
         }
     }
 }

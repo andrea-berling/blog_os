@@ -35,40 +35,6 @@ pub enum ClassType {
     VendorSpecific = 0xff,
 }
 
-impl Display for ClassType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ClassType::UseInterfaceDescriptors => {
-                write!(f, "Use class code info from Interface Descriptors")
-            }
-            ClassType::Audio => write!(f, "Audio"),
-            ClassType::Communications => write!(f, "Communications and CDC Control"),
-            ClassType::HumanInterfaceDevice => write!(f, "Human Interface Device"),
-            ClassType::Physical => write!(f, "Physical"),
-            ClassType::StillImaging => write!(f, "Still Imaging"),
-            ClassType::Printer => write!(f, "Printer"),
-            ClassType::MassStorage => write!(f, "Mass Storage"),
-            ClassType::Hub => write!(f, "Hub"),
-            ClassType::CDCDataDevice => write!(f, "CDC-Data"),
-            ClassType::SmartCard => write!(f, "Smart Card"),
-            ClassType::ContentSecurity => write!(f, "Content Security"),
-            ClassType::Video => write!(f, "Video"),
-            ClassType::PersonalHealthcare => write!(f, "Personal Healthcare"),
-            ClassType::AudioVideo => write!(f, "Audio/Video Devices"),
-            ClassType::Billboard => write!(f, "Billboard"),
-            ClassType::USBCBridge => write!(f, "USB Type-C Bridge"),
-            ClassType::USBBulckDisplayProtocol => write!(f, "USB Bulk Display Protocol"),
-            ClassType::MCTPOverUSBProtocolEndpoint => write!(f, "MCTP over USB Protocol Endpoint"),
-            ClassType::I3C => write!(f, "I3C Device"),
-            ClassType::Diagnostic => write!(f, "Diagnostic Device"),
-            ClassType::WirelessController => write!(f, "Wireless Controller"),
-            ClassType::Miscellaneous => write!(f, "Miscellaneous"),
-            ClassType::ApplicationSpecific => write!(f, "Application Specific"),
-            ClassType::VendorSpecific => write!(f, "Vendor Specific"),
-        }
-    }
-}
-
 pub enum Class {
     UseInterfaceDescriptors, // 0,
     Audio,
@@ -120,4 +86,38 @@ pub enum MassStorageProtocol {
     Uas, // 0x62
     Reserved63hfeh,
     VendorSpecific, // 0xff
+}
+
+impl Display for ClassType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ClassType::UseInterfaceDescriptors => {
+                write!(f, "Use class code info from Interface Descriptors")
+            }
+            ClassType::Audio => write!(f, "Audio"),
+            ClassType::Communications => write!(f, "Communications and CDC Control"),
+            ClassType::HumanInterfaceDevice => write!(f, "Human Interface Device"),
+            ClassType::Physical => write!(f, "Physical"),
+            ClassType::StillImaging => write!(f, "Still Imaging"),
+            ClassType::Printer => write!(f, "Printer"),
+            ClassType::MassStorage => write!(f, "Mass Storage"),
+            ClassType::Hub => write!(f, "Hub"),
+            ClassType::CDCDataDevice => write!(f, "CDC-Data"),
+            ClassType::SmartCard => write!(f, "Smart Card"),
+            ClassType::ContentSecurity => write!(f, "Content Security"),
+            ClassType::Video => write!(f, "Video"),
+            ClassType::PersonalHealthcare => write!(f, "Personal Healthcare"),
+            ClassType::AudioVideo => write!(f, "Audio/Video Devices"),
+            ClassType::Billboard => write!(f, "Billboard"),
+            ClassType::USBCBridge => write!(f, "USB Type-C Bridge"),
+            ClassType::USBBulckDisplayProtocol => write!(f, "USB Bulk Display Protocol"),
+            ClassType::MCTPOverUSBProtocolEndpoint => write!(f, "MCTP over USB Protocol Endpoint"),
+            ClassType::I3C => write!(f, "I3C Device"),
+            ClassType::Diagnostic => write!(f, "Diagnostic Device"),
+            ClassType::WirelessController => write!(f, "Wireless Controller"),
+            ClassType::Miscellaneous => write!(f, "Miscellaneous"),
+            ClassType::ApplicationSpecific => write!(f, "Application Specific"),
+            ClassType::VendorSpecific => write!(f, "Vendor Specific"),
+        }
+    }
 }

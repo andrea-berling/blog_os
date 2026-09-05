@@ -58,20 +58,32 @@ pub enum PermissionFlag {
     Readable = 0x4,
 }
 
-impl core::fmt::Display for PermissionFlag {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            PermissionFlag::Executable => write!(f, "EXECUTABLE"),
-            PermissionFlag::Writable => write!(f, "WRITABLE"),
-            PermissionFlag::Readable => write!(f, "READABLE"),
-        }
-    }
-}
-
 make_bitmap!(new_type: Permissions, underlying_flag_type: PermissionFlag, repr: u8, bit_skipper: |i| i > 2);
 
 #[derive(Debug)]
 pub struct HeaderEntry(inner::HeaderEntry);
+
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug)]
+#[repr(u32)]
+pub enum ProgramHeaderEntryType {
+    Null = 0,
+    Load = 1,
+    Dynamic = 2,
+    Interpreter = 3,
+    Note = 4,
+    SharedLibrary = 5,
+    ProgramHeader = 6,
+    ThreadLocalStorage = 7,
+    OsSpecific(u32),
+    ProcessorSpecific(u32),
+}
+
+pub struct ProgramHeaderEntries<'a> {
+    bytes: &'a [u8],
+    class: header::Class,
+    bytes_read_so_far: usize,
+}
 
 impl HeaderEntry {
     pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
@@ -210,34 +222,30 @@ impl HeaderEntry {
     }
 }
 
-impl core::fmt::Display for HeaderEntry {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Type: {}", self.r#type())?;
-        writeln!(f, "Offset: {:#x}", self.offset())?;
-        writeln!(f, "Virtual Address: {:#x}", self.virtual_address())?;
-        writeln!(f, "Physical Address: {:#x}", self.physical_address())?;
-        writeln!(f, "Size on file: {}", self.segment_size_on_file())?;
-        writeln!(f, "Size in memory: {}", self.segment_size_in_memory())?;
-        writeln!(f, "Address Alignment: {:#x}", self.address_alignment())?;
-        writeln!(f, "Permissions: {}", self.permissions())?;
-        Ok(())
-    }
-}
+impl<'a> ProgramHeaderEntries<'a> {
+    pub(crate) fn new(
+        bytes: &'a [u8],
+        class: header::Class,
+        n_entries: u16,
+    ) -> error::Result<Self> {
+        let entry_size = match class {
+            header::Class::Elf32 => ELF32_ENTRY_SIZE,
+            header::Class::Elf64 => ELF64_ENTRY_SIZE,
+        };
+        if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
+            return Err(Error::new(
+                Fault::NotEnoughBytesFor("program headers"),
+                Context::Parsing,
+                Facility::ElfProgramHeader,
+            ));
+        }
 
-#[cfg_attr(test, derive(PartialEq, Eq))]
-#[derive(Debug)]
-#[repr(u32)]
-pub enum ProgramHeaderEntryType {
-    Null = 0,
-    Load = 1,
-    Dynamic = 2,
-    Interpreter = 3,
-    Note = 4,
-    SharedLibrary = 5,
-    ProgramHeader = 6,
-    ThreadLocalStorage = 7,
-    OsSpecific(u32),
-    ProcessorSpecific(u32),
+        Ok(Self {
+            bytes,
+            class,
+            bytes_read_so_far: 0,
+        })
+    }
 }
 
 impl TryFrom<u32> for ProgramHeaderEntryType {
@@ -262,6 +270,30 @@ impl TryFrom<u32> for ProgramHeaderEntryType {
     }
 }
 
+impl core::fmt::Display for PermissionFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PermissionFlag::Executable => write!(f, "EXECUTABLE"),
+            PermissionFlag::Writable => write!(f, "WRITABLE"),
+            PermissionFlag::Readable => write!(f, "READABLE"),
+        }
+    }
+}
+
+impl core::fmt::Display for HeaderEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Type: {}", self.r#type())?;
+        writeln!(f, "Offset: {:#x}", self.offset())?;
+        writeln!(f, "Virtual Address: {:#x}", self.virtual_address())?;
+        writeln!(f, "Physical Address: {:#x}", self.physical_address())?;
+        writeln!(f, "Size on file: {}", self.segment_size_on_file())?;
+        writeln!(f, "Size in memory: {}", self.segment_size_in_memory())?;
+        writeln!(f, "Address Alignment: {:#x}", self.address_alignment())?;
+        writeln!(f, "Permissions: {}", self.permissions())?;
+        Ok(())
+    }
+}
+
 impl core::fmt::Display for ProgramHeaderEntryType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -276,38 +308,6 @@ impl core::fmt::Display for ProgramHeaderEntryType {
             ProgramHeaderEntryType::OsSpecific(t) => write!(f, "OS-SPECIFIC({t:#x})"),
             ProgramHeaderEntryType::ProcessorSpecific(t) => write!(f, "PROCESSOR-SPECIFIC({t:#x})"),
         }
-    }
-}
-
-pub struct ProgramHeaderEntries<'a> {
-    bytes: &'a [u8],
-    class: header::Class,
-    bytes_read_so_far: usize,
-}
-
-impl<'a> ProgramHeaderEntries<'a> {
-    pub(crate) fn new(
-        bytes: &'a [u8],
-        class: header::Class,
-        n_entries: u16,
-    ) -> error::Result<Self> {
-        let entry_size = match class {
-            header::Class::Elf32 => ELF32_ENTRY_SIZE,
-            header::Class::Elf64 => ELF64_ENTRY_SIZE,
-        };
-        if bytes.len() < (n_entries as u32 * entry_size as u32) as usize {
-            return Err(Error::new(
-                Fault::NotEnoughBytesFor("program headers"),
-                Context::Parsing,
-                Facility::ElfProgramHeader,
-            ));
-        }
-
-        Ok(Self {
-            bytes,
-            class,
-            bytes_read_so_far: 0,
-        })
     }
 }
 

@@ -61,19 +61,6 @@ impl TimerControlWordFlags {
     }
 }
 
-/// Returns the current value of timer zero
-fn read_timer_0_counter() -> u16 {
-    let timer_control_word = TimerControlWordFlags::empty()
-        .select_counter(Counter::_0)
-        .counter_latch()
-        .binary_countdown();
-    let timer_control_word_port = Port::new(TIMER_CONTROL_WORD);
-
-    timer_control_word_port.writeb(u8::from(timer_control_word));
-    let timer_0_reg = Port::new(TIMER_0);
-    (timer_0_reg.readb() as u16) | ((timer_0_reg.readb() as u16) << 8)
-}
-
 #[derive(Debug)]
 pub struct LowPrecisionTimer {
     original_ticks: u64,
@@ -126,6 +113,19 @@ impl LowPrecisionTimer {
             timer.update();
         }
     }
+}
+
+/// Returns the current value of timer zero
+fn read_timer_0_counter() -> u16 {
+    let timer_control_word = TimerControlWordFlags::empty()
+        .select_counter(Counter::_0)
+        .counter_latch()
+        .binary_countdown();
+    let timer_control_word_port = Port::new(TIMER_CONTROL_WORD);
+
+    timer_control_word_port.writeb(u8::from(timer_control_word));
+    let timer_0_reg = Port::new(TIMER_0);
+    (timer_0_reg.readb() as u16) | ((timer_0_reg.readb() as u16) << 8)
 }
 
 #[macro_export]

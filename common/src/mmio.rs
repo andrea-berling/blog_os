@@ -19,19 +19,6 @@ pub struct VolatilePtr<T> {
     _phantom: PhantomData<T>,
 }
 
-impl<T> From<&mut T> for VolatilePtr<T> {
-    /// NOTE: this safe conversion only guarantees what a live `&mut T` guarantees: the
-    /// pointee is a valid, aligned, initialized `T` at a mapped address. The remaining
-    /// volatile conditions (non-cacheable mapping, no concurrent access) are inherited
-    /// from whoever placed the value in memory
-    fn from(address: &mut T) -> Self {
-        Self {
-            address: (&raw mut *address).cast(),
-            _phantom: PhantomData,
-        }
-    }
-}
-
 impl<T> VolatilePtr<T> {
     /// Creates a `VolatilePtr` to the `T` at `address`
     ///
@@ -120,12 +107,6 @@ impl<T: Copy> VolatileValue<T> {
     }
 }
 
-impl<T: Display> Display for VolatileValue<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.read_with(|value| write!(f, "{value}",))
-    }
-}
-
 impl<T> VolatileValue<T> {
     fn into_ptr(&self) -> VolatilePtr<T> {
         VolatilePtr::<T>::from(self)
@@ -141,6 +122,26 @@ impl<T> VolatileValue<T> {
 
     pub fn read_with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.into_ptr().read_with(f)
+    }
+}
+
+pub trait Maskable {
+    type Mask;
+
+    fn mask(self, mask: Self::Mask) -> Self;
+    fn blend(self, other: Self, mask: Self::Mask) -> Self;
+}
+
+impl<T> From<&mut T> for VolatilePtr<T> {
+    /// NOTE: this safe conversion only guarantees what a live `&mut T` guarantees: the
+    /// pointee is a valid, aligned, initialized `T` at a mapped address. The remaining
+    /// volatile conditions (non-cacheable mapping, no concurrent access) are inherited
+    /// from whoever placed the value in memory
+    fn from(address: &mut T) -> Self {
+        Self {
+            address: (&raw mut *address).cast(),
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -170,11 +171,10 @@ impl<T> From<&VolatileValue<T>> for VolatilePtr<T> {
     }
 }
 
-pub trait Maskable {
-    type Mask;
-
-    fn mask(self, mask: Self::Mask) -> Self;
-    fn blend(self, other: Self, mask: Self::Mask) -> Self;
+impl<T: Display> Display for VolatileValue<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.read_with(|value| write!(f, "{value}",))
+    }
 }
 
 impl<T: Maskable + Clone> VolatilePtr<T> {

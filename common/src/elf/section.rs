@@ -80,69 +80,6 @@ pub(crate) enum SectionEntryType {
     UserSpecific(u32),
 }
 
-impl TryFrom<u32> for SectionEntryType {
-    type Error = u32;
-
-    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(SectionEntryType::Null),
-            1 => Ok(SectionEntryType::Progbits),
-            2 => Ok(SectionEntryType::Symtab),
-            3 => Ok(SectionEntryType::Strtab),
-            4 => Ok(SectionEntryType::Rela),
-            5 => Ok(SectionEntryType::Hash),
-            6 => Ok(SectionEntryType::Dynamic),
-            7 => Ok(SectionEntryType::Note),
-            8 => Ok(SectionEntryType::NoBits),
-            9 => Ok(SectionEntryType::Rel),
-            10 => Ok(SectionEntryType::Shlib),
-            11 => Ok(SectionEntryType::DynSym),
-            14 => Ok(SectionEntryType::InitArray),
-            15 => Ok(SectionEntryType::FiniArray),
-            16 => Ok(SectionEntryType::PreinitArray),
-            17 => Ok(SectionEntryType::Group),
-            18 => Ok(SectionEntryType::SymtabIndex),
-            v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
-            v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
-            v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
-            _ => Err(value),
-        }
-    }
-}
-
-impl Display for SectionEntryType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SectionEntryType::Null => write!(f, "NULL"),
-            SectionEntryType::Progbits => write!(f, "PROGBITS"),
-            SectionEntryType::Symtab => write!(f, "SYMTAB"),
-            SectionEntryType::Strtab => write!(f, "STRTAB"),
-            SectionEntryType::Rela => write!(f, "RELA"),
-            SectionEntryType::Hash => write!(f, "HASH"),
-            SectionEntryType::Dynamic => write!(f, "DYNAMIC"),
-            SectionEntryType::Note => write!(f, "NOTE"),
-            SectionEntryType::NoBits => write!(f, "NOBITS"),
-            SectionEntryType::Rel => write!(f, "REL"),
-            SectionEntryType::Shlib => write!(f, "SHLIB"),
-            SectionEntryType::DynSym => write!(f, "DYNSYM"),
-            SectionEntryType::InitArray => write!(f, "INIT_ARRAY"),
-            SectionEntryType::FiniArray => write!(f, "FINI_ARRAY"),
-            SectionEntryType::PreinitArray => write!(f, "PREINIT_ARRAY"),
-            SectionEntryType::Group => write!(f, "GROUP"),
-            SectionEntryType::SymtabIndex => write!(f, "SYMTAB_INDEX"),
-            SectionEntryType::OsSpecific(value) => {
-                write!(f, "OS_SPECIFIC({value:#x})")
-            }
-            SectionEntryType::ProcessorSpecific(value) => {
-                write!(f, "PROCESSOR_SPECIFIC({value:#x})")
-            }
-            SectionEntryType::UserSpecific(value) => {
-                write!(f, "USER_SPECIFIC({value:#x})")
-            }
-        }
-    }
-}
-
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u32)]
 pub enum FlagType {
@@ -158,29 +95,23 @@ pub enum FlagType {
     Tls = 0x400,
 }
 
-impl Display for FlagType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            FlagType::Writeable => write!(f, "WRITEABLE"),
-            FlagType::Allocated => write!(f, "ALLOCATED"),
-            FlagType::ExecutableInstructions => write!(f, "EXECUTABLE_INSTRUCTIONS"),
-            FlagType::Merge => write!(f, "MERGE"),
-            FlagType::Strings => write!(f, "STRINGS"),
-            FlagType::InfoLink => write!(f, "INFO_LINK"),
-            FlagType::LinkOrder => write!(f, "LINK_ORDER"),
-            FlagType::OsNonconforming => write!(f, "OS_NONCONFORMING"),
-            FlagType::InGroup => write!(f, "IN_GROUP"),
-            FlagType::Tls => write!(f, "TLS"),
-        }
-    }
-}
-
 make_bitmap!(new_type: Flags, underlying_flag_type: FlagType, repr: u64, bit_skipper: |i| i == 3 || i > 6);
 
 #[derive(Debug)]
 pub enum Section<'a> {
     StringTable(&'a [u8]),
 }
+
+#[derive(Debug)]
+pub struct HeaderEntry(inner::HeaderEntry);
+
+pub struct SectionHeaderEntries<'a> {
+    bytes: &'a [u8],
+    class: header::Class,
+    bytes_read_so_far: usize,
+}
+
+pub struct StringTable<'a>(&'a [u8]);
 
 impl<'a> Section<'a> {
     pub fn downcast_to_string_table(&self) -> error::Result<StringTable<'a>> {
@@ -189,9 +120,6 @@ impl<'a> Section<'a> {
         }
     }
 }
-
-#[derive(Debug)]
-pub struct HeaderEntry(inner::HeaderEntry);
 
 impl HeaderEntry {
     pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
@@ -345,12 +273,6 @@ impl HeaderEntry {
     }
 }
 
-pub struct SectionHeaderEntries<'a> {
-    bytes: &'a [u8],
-    class: header::Class,
-    bytes_read_so_far: usize,
-}
-
 impl<'a> SectionHeaderEntries<'a> {
     pub(crate) fn new(
         bytes: &'a [u8],
@@ -377,6 +299,98 @@ impl<'a> SectionHeaderEntries<'a> {
     }
 }
 
+impl<'a> StringTable<'a> {
+    pub fn get_string(&self, index: usize) -> Option<core::result::Result<&str, Utf8Error>> {
+        if index >= self.0.len() {
+            return None;
+        }
+
+        let endpoint = self.0[index..].iter().position(|&c| c == 0x0)?;
+
+        Some(str::from_utf8(&self.0[index..][..endpoint]))
+    }
+}
+
+impl TryFrom<u32> for SectionEntryType {
+    type Error = u32;
+
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(SectionEntryType::Null),
+            1 => Ok(SectionEntryType::Progbits),
+            2 => Ok(SectionEntryType::Symtab),
+            3 => Ok(SectionEntryType::Strtab),
+            4 => Ok(SectionEntryType::Rela),
+            5 => Ok(SectionEntryType::Hash),
+            6 => Ok(SectionEntryType::Dynamic),
+            7 => Ok(SectionEntryType::Note),
+            8 => Ok(SectionEntryType::NoBits),
+            9 => Ok(SectionEntryType::Rel),
+            10 => Ok(SectionEntryType::Shlib),
+            11 => Ok(SectionEntryType::DynSym),
+            14 => Ok(SectionEntryType::InitArray),
+            15 => Ok(SectionEntryType::FiniArray),
+            16 => Ok(SectionEntryType::PreinitArray),
+            17 => Ok(SectionEntryType::Group),
+            18 => Ok(SectionEntryType::SymtabIndex),
+            v @ 0x60000000..=0x6fffffff => Ok(SectionEntryType::OsSpecific(v)),
+            v @ 0x70000000..=0x7fffffff => Ok(SectionEntryType::ProcessorSpecific(v)),
+            v @ 0x80000000..=0xffffffff => Ok(SectionEntryType::UserSpecific(v)),
+            _ => Err(value),
+        }
+    }
+}
+
+impl Display for SectionEntryType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SectionEntryType::Null => write!(f, "NULL"),
+            SectionEntryType::Progbits => write!(f, "PROGBITS"),
+            SectionEntryType::Symtab => write!(f, "SYMTAB"),
+            SectionEntryType::Strtab => write!(f, "STRTAB"),
+            SectionEntryType::Rela => write!(f, "RELA"),
+            SectionEntryType::Hash => write!(f, "HASH"),
+            SectionEntryType::Dynamic => write!(f, "DYNAMIC"),
+            SectionEntryType::Note => write!(f, "NOTE"),
+            SectionEntryType::NoBits => write!(f, "NOBITS"),
+            SectionEntryType::Rel => write!(f, "REL"),
+            SectionEntryType::Shlib => write!(f, "SHLIB"),
+            SectionEntryType::DynSym => write!(f, "DYNSYM"),
+            SectionEntryType::InitArray => write!(f, "INIT_ARRAY"),
+            SectionEntryType::FiniArray => write!(f, "FINI_ARRAY"),
+            SectionEntryType::PreinitArray => write!(f, "PREINIT_ARRAY"),
+            SectionEntryType::Group => write!(f, "GROUP"),
+            SectionEntryType::SymtabIndex => write!(f, "SYMTAB_INDEX"),
+            SectionEntryType::OsSpecific(value) => {
+                write!(f, "OS_SPECIFIC({value:#x})")
+            }
+            SectionEntryType::ProcessorSpecific(value) => {
+                write!(f, "PROCESSOR_SPECIFIC({value:#x})")
+            }
+            SectionEntryType::UserSpecific(value) => {
+                write!(f, "USER_SPECIFIC({value:#x})")
+            }
+        }
+    }
+}
+
+impl Display for FlagType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FlagType::Writeable => write!(f, "WRITEABLE"),
+            FlagType::Allocated => write!(f, "ALLOCATED"),
+            FlagType::ExecutableInstructions => write!(f, "EXECUTABLE_INSTRUCTIONS"),
+            FlagType::Merge => write!(f, "MERGE"),
+            FlagType::Strings => write!(f, "STRINGS"),
+            FlagType::InfoLink => write!(f, "INFO_LINK"),
+            FlagType::LinkOrder => write!(f, "LINK_ORDER"),
+            FlagType::OsNonconforming => write!(f, "OS_NONCONFORMING"),
+            FlagType::InGroup => write!(f, "IN_GROUP"),
+            FlagType::Tls => write!(f, "TLS"),
+        }
+    }
+}
+
 impl<'a> Iterator for SectionHeaderEntries<'a> {
     type Item = error::Result<HeaderEntry>;
 
@@ -399,20 +413,6 @@ impl<'a> Iterator for SectionHeaderEntries<'a> {
                     self.bytes_read_so_far += entry_size;
                 }),
         )
-    }
-}
-
-pub struct StringTable<'a>(&'a [u8]);
-
-impl<'a> StringTable<'a> {
-    pub fn get_string(&self, index: usize) -> Option<core::result::Result<&str, Utf8Error>> {
-        if index >= self.0.len() {
-            return None;
-        }
-
-        let endpoint = self.0[index..].iter().position(|&c| c == 0x0)?;
-
-        Some(str::from_utf8(&self.0[index..][..endpoint]))
     }
 }
 

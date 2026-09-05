@@ -25,32 +25,19 @@ pub struct StandardParameters {
     pub max_packet_length: Option<MaxPacketLength>,
 }
 
-pub fn set_address_bundle(
-    StandardParameters {
-        address,
-        endpoint_speed,
-        ..
-    }: StandardParameters,
-) -> error::Result<StaticBundle> {
-    let mut bundle = allocate_static_bundle(AllocationRequest {
-        n_queue_heads: 1,
-        n_queue_transfer_descriptors: 2,
-        n_buffers: 1,
-    })?;
-
-    bundle.initialize_control_queue_head(Address::default(), endpoint_speed, None)?;
-    bundle.initialize_setup_queue_transfer_descriptor(SetupData::set_address(address))?;
-    bundle.handshake_last_queue_transfer_descriptor(PacketId::In)?;
-    bundle.link_things_up()?;
-
-    Ok(bundle)
-}
-
 pub struct GetDescriptorStaticBundle {
     bundle: StaticBundle,
     descriptor_type: DescriptorType,
     descriptor_length: u16,
     descriptor_alignment: usize,
+}
+
+pub struct GetDescriptorParameters {
+    pub descriptor_type: DescriptorType,
+    pub descriptor_length: u16,
+    pub descriptor_alignment: usize,
+    pub descriptor_index: usize,
+    pub lang_id: Option<LanguageId>,
 }
 
 impl GetDescriptorStaticBundle {
@@ -135,12 +122,6 @@ impl GetDescriptorStaticBundle {
     }
 }
 
-impl core::ops::DerefMut for GetDescriptorStaticBundle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.bundle
-    }
-}
-
 impl core::ops::Deref for GetDescriptorStaticBundle {
     type Target = StaticBundle;
 
@@ -149,12 +130,31 @@ impl core::ops::Deref for GetDescriptorStaticBundle {
     }
 }
 
-pub struct GetDescriptorParameters {
-    pub descriptor_type: DescriptorType,
-    pub descriptor_length: u16,
-    pub descriptor_alignment: usize,
-    pub descriptor_index: usize,
-    pub lang_id: Option<LanguageId>,
+impl core::ops::DerefMut for GetDescriptorStaticBundle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.bundle
+    }
+}
+
+pub fn set_address_bundle(
+    StandardParameters {
+        address,
+        endpoint_speed,
+        ..
+    }: StandardParameters,
+) -> error::Result<StaticBundle> {
+    let mut bundle = allocate_static_bundle(AllocationRequest {
+        n_queue_heads: 1,
+        n_queue_transfer_descriptors: 2,
+        n_buffers: 1,
+    })?;
+
+    bundle.initialize_control_queue_head(Address::default(), endpoint_speed, None)?;
+    bundle.initialize_setup_queue_transfer_descriptor(SetupData::set_address(address))?;
+    bundle.handshake_last_queue_transfer_descriptor(PacketId::In)?;
+    bundle.link_things_up()?;
+
+    Ok(bundle)
 }
 
 /// Builds the EHCI data structure bundle needed to perform a GET_DESCRIPTOR control

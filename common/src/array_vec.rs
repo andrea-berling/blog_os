@@ -76,12 +76,6 @@ impl<T, const N: usize> ArrayVec<T, N> {
     }
 }
 
-impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
-    }
-}
-
 impl<T, const N: usize> Deref for ArrayVec<T, N> {
     type Target = [T];
 
@@ -90,9 +84,9 @@ impl<T, const N: usize> Deref for ArrayVec<T, N> {
     }
 }
 
-impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.as_mut()[index]
+impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
     }
 }
 
@@ -104,23 +98,9 @@ impl<T, const N: usize> Index<usize> for ArrayVec<T, N> {
     }
 }
 
-impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N> {
-    type Item = &'a T;
-
-    type IntoIter = core::slice::Iter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N> {
-    type Item = &'a mut T;
-
-    type IntoIter = core::slice::IterMut<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
+impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.as_mut()[index]
     }
 }
 
@@ -133,5 +113,23 @@ impl<T, const N: usize> Default for ArrayVec<T, N> {
 impl<T, const N: usize> Drop for ArrayVec<T, N> {
     fn drop(&mut self) {
         while self.pop().is_some() {}
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N> {
+    type IntoIter = core::slice::Iter<'a, T>;
+    type Item = &'a T;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N> {
+    type IntoIter = core::slice::IterMut<'a, T>;
+    type Item = &'a mut T;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }

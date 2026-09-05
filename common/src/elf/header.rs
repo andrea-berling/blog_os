@@ -69,15 +69,6 @@ pub(crate) enum Encoding {
     BigEndian = 2,
 }
 
-impl Display for Encoding {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Encoding::LittleEndian => write!(f, "Little Endian"),
-            Encoding::BigEndian => write!(f, "Big Endian"),
-        }
-    }
-}
-
 #[cfg_attr(test, derive(Default, PartialEq, Eq))]
 #[derive(Debug, Clone, Copy, TryFromBytes, TryFromPrimitive)]
 #[repr(u8)]
@@ -87,38 +78,11 @@ pub(crate) enum Class {
     Elf64 = 2,
 }
 
-impl Display for Class {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Class::Elf32 => write!(f, "ELF32"),
-            Class::Elf64 => write!(f, "ELF64"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 enum Version {
     Invalid,
     Current,
-}
-
-impl<T: Into<u32>> From<T> for Version {
-    fn from(value: T) -> Self {
-        match value.into() {
-            1u32 => Self::Current,
-            _ => Self::Invalid,
-        }
-    }
-}
-
-impl Display for Version {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Version::Invalid => write!(f, "Invalid"),
-            Version::Current => write!(f, "Current"),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -133,39 +97,6 @@ pub enum ObjectType {
     HiOS = 0xfeff,
     LoProc = 0xff00,
     HiProc = 0xffff,
-}
-
-impl TryFrom<u16> for ObjectType {
-    type Error = u16;
-
-    fn try_from(value: u16) -> core::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ObjectType::None),
-            1 => Ok(ObjectType::Relocatable),
-            2 => Ok(ObjectType::Executable),
-            3 => Ok(ObjectType::Dynamic),
-            4 => Ok(ObjectType::Core),
-            0xfe00..=0xfeff => Ok(ObjectType::LoOS),
-            0xff00..=0xffff => Ok(ObjectType::LoProc),
-            _ => Err(value),
-        }
-    }
-}
-
-impl Display for ObjectType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ObjectType::None => write!(f, "NONE (No file type)"),
-            ObjectType::Relocatable => write!(f, "REL (Relocatable file)"),
-            ObjectType::Executable => write!(f, "EXEC (Executable file)"),
-            ObjectType::Dynamic => write!(f, "DYN (Shared object file)"),
-            ObjectType::Core => write!(f, "CORE (Core file)"),
-            ObjectType::LoOS => write!(f, "LOOS (Operating system-specific)"),
-            ObjectType::HiOS => write!(f, "HIOS (Operating system-specific)"),
-            ObjectType::LoProc => write!(f, "LOPROC (Processor-specific)"),
-            ObjectType::HiProc => write!(f, "HIPROC (Processor-specific)"),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -381,6 +312,32 @@ impl Header {
     }
 }
 
+impl<T: Into<u32>> From<T> for Version {
+    fn from(value: T) -> Self {
+        match value.into() {
+            1u32 => Self::Current,
+            _ => Self::Invalid,
+        }
+    }
+}
+
+impl TryFrom<u16> for ObjectType {
+    type Error = u16;
+
+    fn try_from(value: u16) -> core::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ObjectType::None),
+            1 => Ok(ObjectType::Relocatable),
+            2 => Ok(ObjectType::Executable),
+            3 => Ok(ObjectType::Dynamic),
+            4 => Ok(ObjectType::Core),
+            0xfe00..=0xfeff => Ok(ObjectType::LoOS),
+            0xff00..=0xffff => Ok(ObjectType::LoProc),
+            _ => Err(value),
+        }
+    }
+}
+
 impl TryFrom<&[u8]> for Header {
     type Error = Error;
 
@@ -458,6 +415,49 @@ impl TryFrom<&[u8]> for Header {
         }
 
         Ok(elf_header)
+    }
+}
+
+impl Display for Encoding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Encoding::LittleEndian => write!(f, "Little Endian"),
+            Encoding::BigEndian => write!(f, "Big Endian"),
+        }
+    }
+}
+
+impl Display for Class {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Class::Elf32 => write!(f, "ELF32"),
+            Class::Elf64 => write!(f, "ELF64"),
+        }
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Version::Invalid => write!(f, "Invalid"),
+            Version::Current => write!(f, "Current"),
+        }
+    }
+}
+
+impl Display for ObjectType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ObjectType::None => write!(f, "NONE (No file type)"),
+            ObjectType::Relocatable => write!(f, "REL (Relocatable file)"),
+            ObjectType::Executable => write!(f, "EXEC (Executable file)"),
+            ObjectType::Dynamic => write!(f, "DYN (Shared object file)"),
+            ObjectType::Core => write!(f, "CORE (Core file)"),
+            ObjectType::LoOS => write!(f, "LOOS (Operating system-specific)"),
+            ObjectType::HiOS => write!(f, "HIOS (Operating system-specific)"),
+            ObjectType::LoProc => write!(f, "LOPROC (Processor-specific)"),
+            ObjectType::HiProc => write!(f, "HIPROC (Processor-specific)"),
+        }
     }
 }
 

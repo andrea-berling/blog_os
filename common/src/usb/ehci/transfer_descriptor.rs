@@ -17,38 +17,6 @@ pub enum QueueTransferDescriptorPointerBit {
 
 make_bitmap!(new_type: QueueTransferDescriptorPointer, underlying_flag_type: QueueTransferDescriptorPointerBit, repr: u32, nodisplay);
 
-impl QueueTransferDescriptorPointer {
-    pub fn with_terminate(mut self) -> Self {
-        self.set_flag(QueueTransferDescriptorPointerBit::Terminate);
-        self
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.bits == 0
-    }
-}
-
-impl core::fmt::Display for QueueTransferDescriptorPointer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Address: {:#x}, Terminate: {}",
-            self.bits & !0x1,
-            self.is_set(QueueTransferDescriptorPointerBit::Terminate)
-        )
-    }
-}
-
-impl From<*const QueueTransferDescriptor> for QueueTransferDescriptorPointer {
-    fn from(value: *const QueueTransferDescriptor) -> Self {
-        let mut result = Self::default();
-        // FIXME: today addresses are always physical, one day they'll be virtual. This will break
-        // that day
-        bits::set_bits!(bits_expr: result.bits, value: value as u32 >> 5, n_bits: 27, starts_at_bit: 5, bits_expr_ty: u32);
-        result
-    }
-}
-
 #[derive(TryFromPrimitive, Clone, Copy)]
 #[repr(u8)]
 pub enum PacketId {
@@ -56,17 +24,6 @@ pub enum PacketId {
     In,
     Setup,
     Reserved,
-}
-
-impl core::fmt::Display for PacketId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            PacketId::Out => write!(f, "OUT"),
-            PacketId::In => write!(f, "IN"),
-            PacketId::Setup => write!(f, "SETUP"),
-            PacketId::Reserved => write!(f, "Reserved"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, TryFromPrimitive)]
@@ -84,65 +41,59 @@ pub enum QueueTransferDescriptorTokenBit {
     DataToggle = 1 << 31,
 }
 
-impl core::fmt::Display for QueueTransferDescriptorTokenBit {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        //EndpointCapabilitiesBit::InactivateOnNextTransaction => write!(f, "Invalidate on Next Transaction"),
-        match self {
-            QueueTransferDescriptorTokenBit::PingState => write!(f, "PingState"),
-            QueueTransferDescriptorTokenBit::SplitTransactionState => {
-                write!(f, "SplitTransactionState")
-            }
-            QueueTransferDescriptorTokenBit::MissedMicroFrame => write!(f, "MissedMicroFrame"),
-            QueueTransferDescriptorTokenBit::TransactionError => write!(f, "TransactionError"),
-            QueueTransferDescriptorTokenBit::BabbleDetected => write!(f, "BabbleDetected"),
-            QueueTransferDescriptorTokenBit::DataBufferError => write!(f, "DataBufferError"),
-            QueueTransferDescriptorTokenBit::Halted => write!(f, "Halted"),
-            QueueTransferDescriptorTokenBit::Active => write!(f, "Active"),
-            QueueTransferDescriptorTokenBit::InterruptOnComplete => {
-                write!(f, "InterruptOnComplete")
-            }
-            QueueTransferDescriptorTokenBit::DataToggle => write!(f, "DataToggle"),
-        }
-    }
-}
-
 make_bitmap!(new_type: QueueTransferDescriptorToken, underlying_flag_type: QueueTransferDescriptorTokenBit, repr: u32, nodisplay);
 
-impl core::fmt::Display for QueueTransferDescriptorToken {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        use QueueTransferDescriptorTokenBit::*;
-        let mut printed_once = false;
-        for flag in [
-            PingState,
-            SplitTransactionState,
-            MissedMicroFrame,
-            TransactionError,
-            BabbleDetected,
-            DataBufferError,
-            Halted,
-            Active,
-            InterruptOnComplete,
-            DataToggle,
-        ] {
-            if self.is_set(flag) {
-                if printed_once {
-                    write!(f, "|")?;
-                }
-                write!(f, "{flag}")?;
-                printed_once = true;
-            }
-        }
-        if printed_once {
-            writeln!(f)?;
-        }
-        writeln!(
-            f,
-            "Total Bytes to Transfer: {}",
-            self.get_total_bytes_to_transfer()
-        )?;
-        writeln!(f, "Current Page: {}", self.get_current_page())?;
-        writeln!(f, "Error Count: {}", self.get_error_count())?;
-        write!(f, "Packet ID: {}", self.get_packet_id())
+#[derive(Default)]
+pub struct BufferPointer {
+    bits: u32,
+}
+
+#[repr(align(4096))]
+pub struct BufferPage([u8; 4096]);
+
+#[derive(Clone, Copy, Debug)]
+pub struct BufferIndexNoOffset(usize);
+
+#[derive(Clone, Copy, Debug)]
+pub struct BufferIndex {
+    index: BufferIndexNoOffset,
+    offset: u16,
+}
+
+#[repr(C)]
+pub struct RawQueueTransferDescriptor {
+    next_pointer: VolatileValue<QueueTransferDescriptorPointer>,
+    alternate_next_pointer: VolatileValue<QueueTransferDescriptorPointer>,
+    token: VolatileValue<QueueTransferDescriptorToken>,
+    buffer_pointers: [VolatileValue<BufferPointer>; 5],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QueueTransferDescriptorIndex(pub usize);
+
+#[repr(C, align(32))]
+pub struct QueueTransferDescriptor {
+    raw: RawQueueTransferDescriptor,
+    pool_index: QueueTransferDescriptorIndex,
+    next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
+    alternate_next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
+    buffer_pointers: [Option<BufferIndex>; 5],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C, align(32))]
+pub struct BlankQueueTransferDescriptor(
+    [u32; size_of::<QueueTransferDescriptor>() / (u32::BITS / u8::BITS) as usize],
+);
+
+impl QueueTransferDescriptorPointer {
+    pub fn with_terminate(mut self) -> Self {
+        self.set_flag(QueueTransferDescriptorPointerBit::Terminate);
+        self
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.bits == 0
     }
 }
 
@@ -195,25 +146,9 @@ impl QueueTransferDescriptorToken {
     }
 }
 
-#[derive(Default)]
-pub struct BufferPointer {
-    bits: u32,
-}
-
-impl core::fmt::Display for BufferPointer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Address: {:#x}, Current Offset: {}",
-            self.get_address(),
-            self.get_current_offset()
-        )
-    }
-}
-
 impl BufferPointer {
-    pub const MAX_ALLOWED_OFFSET: usize = 0xfff;
     pub const ALIGNMENT: usize = 4096;
+    pub const MAX_ALLOWED_OFFSET: usize = 0xfff;
 
     pub fn set_address(&mut self, address: *const BufferPage) -> error::Result<()> {
         if address as usize & (Self::ALIGNMENT - 1) != 0 {
@@ -247,48 +182,10 @@ impl BufferPointer {
     }
 }
 
-#[repr(align(4096))]
-pub struct BufferPage([u8; 4096]);
-
 impl BufferPage {
     pub fn clear(&mut self) {
         self.0.fill(0);
     }
-}
-
-impl DerefMut for BufferPage {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for BufferPage {
-    type Target = [u8; 4096];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct BufferIndexNoOffset(usize);
-
-impl From<usize> for BufferIndexNoOffset {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl From<BufferIndexNoOffset> for usize {
-    fn from(value: BufferIndexNoOffset) -> Self {
-        value.0
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct BufferIndex {
-    index: BufferIndexNoOffset,
-    offset: u16,
 }
 
 impl BufferIndex {
@@ -315,31 +212,6 @@ impl BufferIndex {
 
     pub fn offset(&self) -> u16 {
         self.offset
-    }
-}
-
-pub(super) const N_BLANK_BUFFER_PAGES: usize = 10;
-
-pub(super) static mut BLANK_BUFFER_PAGES: [BufferPage; N_BLANK_BUFFER_PAGES] =
-    [const { BufferPage([0; _]) }; _];
-
-#[repr(C)]
-pub struct RawQueueTransferDescriptor {
-    next_pointer: VolatileValue<QueueTransferDescriptorPointer>,
-    alternate_next_pointer: VolatileValue<QueueTransferDescriptorPointer>,
-    token: VolatileValue<QueueTransferDescriptorToken>,
-    buffer_pointers: [VolatileValue<BufferPointer>; 5],
-}
-
-impl core::fmt::Display for RawQueueTransferDescriptor {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Next Pointer: {}", self.next_pointer)?;
-        writeln!(f, "Alternate Next Pointer: {}", self.alternate_next_pointer)?;
-        writeln!(f, "Token: {}", self.token)?;
-        for (i, buffer_pointer) in self.buffer_pointers.iter().enumerate() {
-            writeln!(f, "Buffer Pointer {i}: {buffer_pointer}")?;
-        }
-        Ok(())
     }
 }
 
@@ -378,30 +250,6 @@ impl RawQueueTransferDescriptor {
             buffer_pointer.update(|buffer_pointer| buffer_pointer.clear());
         }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct QueueTransferDescriptorIndex(pub usize);
-
-impl From<usize> for QueueTransferDescriptorIndex {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl From<QueueTransferDescriptorIndex> for usize {
-    fn from(value: QueueTransferDescriptorIndex) -> usize {
-        value.0
-    }
-}
-
-#[repr(C, align(32))]
-pub struct QueueTransferDescriptor {
-    raw: RawQueueTransferDescriptor,
-    pool_index: QueueTransferDescriptorIndex,
-    next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
-    alternate_next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
-    buffer_pointers: [Option<BufferIndex>; 5],
 }
 
 impl QueueTransferDescriptor {
@@ -471,6 +319,151 @@ impl QueueTransferDescriptor {
     }
 }
 
+impl BlankQueueTransferDescriptor {
+    pub const fn blank() -> Self {
+        Self([0; _])
+    }
+}
+
+impl From<*const QueueTransferDescriptor> for QueueTransferDescriptorPointer {
+    fn from(value: *const QueueTransferDescriptor) -> Self {
+        let mut result = Self::default();
+        // FIXME: today addresses are always physical, one day they'll be virtual. This will break
+        // that day
+        bits::set_bits!(bits_expr: result.bits, value: value as u32 >> 5, n_bits: 27, starts_at_bit: 5, bits_expr_ty: u32);
+        result
+    }
+}
+
+impl From<usize> for BufferIndexNoOffset {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl From<BufferIndexNoOffset> for usize {
+    fn from(value: BufferIndexNoOffset) -> Self {
+        value.0
+    }
+}
+
+impl From<usize> for QueueTransferDescriptorIndex {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl From<QueueTransferDescriptorIndex> for usize {
+    fn from(value: QueueTransferDescriptorIndex) -> usize {
+        value.0
+    }
+}
+
+impl core::fmt::Display for QueueTransferDescriptorPointer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Address: {:#x}, Terminate: {}",
+            self.bits & !0x1,
+            self.is_set(QueueTransferDescriptorPointerBit::Terminate)
+        )
+    }
+}
+
+impl core::fmt::Display for PacketId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PacketId::Out => write!(f, "OUT"),
+            PacketId::In => write!(f, "IN"),
+            PacketId::Setup => write!(f, "SETUP"),
+            PacketId::Reserved => write!(f, "Reserved"),
+        }
+    }
+}
+
+impl core::fmt::Display for QueueTransferDescriptorTokenBit {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        //EndpointCapabilitiesBit::InactivateOnNextTransaction => write!(f, "Invalidate on Next Transaction"),
+        match self {
+            QueueTransferDescriptorTokenBit::PingState => write!(f, "PingState"),
+            QueueTransferDescriptorTokenBit::SplitTransactionState => {
+                write!(f, "SplitTransactionState")
+            }
+            QueueTransferDescriptorTokenBit::MissedMicroFrame => write!(f, "MissedMicroFrame"),
+            QueueTransferDescriptorTokenBit::TransactionError => write!(f, "TransactionError"),
+            QueueTransferDescriptorTokenBit::BabbleDetected => write!(f, "BabbleDetected"),
+            QueueTransferDescriptorTokenBit::DataBufferError => write!(f, "DataBufferError"),
+            QueueTransferDescriptorTokenBit::Halted => write!(f, "Halted"),
+            QueueTransferDescriptorTokenBit::Active => write!(f, "Active"),
+            QueueTransferDescriptorTokenBit::InterruptOnComplete => {
+                write!(f, "InterruptOnComplete")
+            }
+            QueueTransferDescriptorTokenBit::DataToggle => write!(f, "DataToggle"),
+        }
+    }
+}
+
+impl core::fmt::Display for QueueTransferDescriptorToken {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use QueueTransferDescriptorTokenBit::*;
+        let mut printed_once = false;
+        for flag in [
+            PingState,
+            SplitTransactionState,
+            MissedMicroFrame,
+            TransactionError,
+            BabbleDetected,
+            DataBufferError,
+            Halted,
+            Active,
+            InterruptOnComplete,
+            DataToggle,
+        ] {
+            if self.is_set(flag) {
+                if printed_once {
+                    write!(f, "|")?;
+                }
+                write!(f, "{flag}")?;
+                printed_once = true;
+            }
+        }
+        if printed_once {
+            writeln!(f)?;
+        }
+        writeln!(
+            f,
+            "Total Bytes to Transfer: {}",
+            self.get_total_bytes_to_transfer()
+        )?;
+        writeln!(f, "Current Page: {}", self.get_current_page())?;
+        writeln!(f, "Error Count: {}", self.get_error_count())?;
+        write!(f, "Packet ID: {}", self.get_packet_id())
+    }
+}
+
+impl core::fmt::Display for BufferPointer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Address: {:#x}, Current Offset: {}",
+            self.get_address(),
+            self.get_current_offset()
+        )
+    }
+}
+
+impl core::fmt::Display for RawQueueTransferDescriptor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Next Pointer: {}", self.next_pointer)?;
+        writeln!(f, "Alternate Next Pointer: {}", self.alternate_next_pointer)?;
+        writeln!(f, "Token: {}", self.token)?;
+        for (i, buffer_pointer) in self.buffer_pointers.iter().enumerate() {
+            writeln!(f, "Buffer Pointer {i}: {buffer_pointer}")?;
+        }
+        Ok(())
+    }
+}
+
 impl core::fmt::Display for QueueTransferDescriptor {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(f, "Raw: {}", self.raw)?;
@@ -492,9 +485,17 @@ impl core::fmt::Display for QueueTransferDescriptor {
     }
 }
 
-impl DerefMut for QueueTransferDescriptor {
+impl Deref for BufferPage {
+    type Target = [u8; 4096];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BufferPage {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.raw
+        &mut self.0
     }
 }
 
@@ -506,17 +507,16 @@ impl Deref for QueueTransferDescriptor {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C, align(32))]
-pub struct BlankQueueTransferDescriptor(
-    [u32; size_of::<QueueTransferDescriptor>() / (u32::BITS / u8::BITS) as usize],
-);
-
-impl BlankQueueTransferDescriptor {
-    pub const fn blank() -> Self {
-        Self([0; _])
+impl DerefMut for QueueTransferDescriptor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.raw
     }
 }
+
+pub(super) const N_BLANK_BUFFER_PAGES: usize = 10;
+
+pub(super) static mut BLANK_BUFFER_PAGES: [BufferPage; N_BLANK_BUFFER_PAGES] =
+    [const { BufferPage([0; _]) }; _];
 
 pub(super) const N_BLANK_QUEUE_TRANSFER_DESCRIPTORS: usize = 10;
 

@@ -3,8 +3,6 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-// FIXME: arrange code better in the files (see the code organization conventions in
-// CONTRIBUTING.md; this will be applied at a later time)
 use num_enum::TryFromPrimitive;
 
 use crate::{
@@ -36,38 +34,6 @@ pub enum QueueHeadPointerBit {
 
 make_bitmap!(new_type: RawQueueHeadPointer, underlying_flag_type: QueueHeadPointerBit, repr: u32, nodisplay);
 
-impl core::fmt::Display for RawQueueHeadPointer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Val: {:#x}, Address: {:#x}, Type: {:#b}, Terminate: {}",
-            self.bits,
-            bits::get_bits!(bits_expr: self.bits, n_bits: 27, starts_at_bit: 5, return_ty: u32)
-                << 5,
-            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 1, return_ty: u32),
-            self.is_set(QueueHeadPointerBit::Terminate)
-        )
-    }
-}
-
-impl From<QueueHeadPointer> for RawQueueHeadPointer {
-    fn from(value: QueueHeadPointer) -> Self {
-        match value {
-            QueueHeadPointer::IsochronousTransferDescriptor => todo!(),
-            QueueHeadPointer::QueueHead(queue_head) => {
-                let mut result = Self::default();
-                bits::set_bits!(bits_expr: result.bits, value: 0b01, n_bits: 2, starts_at_bit: 1, bits_expr_ty: u32);
-                // FIXME: today addresses are always physical, one day they'll be virtual. This will break
-                // that day
-                bits::set_bits!(bits_expr: result.bits, value: queue_head as u32 >> 5, n_bits: 27, starts_at_bit: 5, bits_expr_ty: u32);
-                result
-            }
-            QueueHeadPointer::SplitTransactionIsochronousTransferDescriptor => todo!(),
-            QueueHeadPointer::FrameSpanTraversalNode => todo!(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum EndpointSpeed {
@@ -75,17 +41,6 @@ pub enum EndpointSpeed {
     LowSpeed,
     HighSpeed,
     Reserved,
-}
-
-impl Display for EndpointSpeed {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            EndpointSpeed::FullSpeed => write!(f, "Full Speed"),
-            EndpointSpeed::LowSpeed => write!(f, "Low Speed"),
-            EndpointSpeed::HighSpeed => write!(f, "High Speed"),
-            EndpointSpeed::Reserved => write!(f, "Reserved"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, TryFromPrimitive)]
@@ -97,23 +52,6 @@ pub enum HighBandwidthPipeMultiplier {
     ThreeTransactionPerMicroFrame,
 }
 
-impl Display for HighBandwidthPipeMultiplier {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            HighBandwidthPipeMultiplier::Reserved => write!(f, "Reserved"),
-            HighBandwidthPipeMultiplier::OneTransactionPerMicroFrame => {
-                write!(f, "1 transaction per micro-frame")
-            }
-            HighBandwidthPipeMultiplier::TwoTransactionPerMicroFrame => {
-                write!(f, "2 transactions per micro-frame")
-            }
-            HighBandwidthPipeMultiplier::ThreeTransactionPerMicroFrame => {
-                write!(f, "3 transactions per micro-frame")
-            }
-        }
-    }
-}
-
 #[derive(Clone, Copy, TryFromPrimitive)]
 #[repr(u64)]
 pub enum EndpointCharacteristicsBit {
@@ -123,22 +61,52 @@ pub enum EndpointCharacteristicsBit {
     ControlEndpoint = 1 << 27,
 }
 
-impl core::fmt::Display for EndpointCharacteristicsBit {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            EndpointCharacteristicsBit::InactivateOnNextTransaction => {
-                write!(f, "Invalidate on Next Transaction")
-            }
-            EndpointCharacteristicsBit::DataToggleControl => write!(f, "DataToggleControl"),
-            EndpointCharacteristicsBit::HeadOfReclamationListFlag => {
-                write!(f, "HeadOfReclamationListFlag")
-            }
-            EndpointCharacteristicsBit::ControlEndpoint => write!(f, "ControlEndpoint"),
-        }
-    }
+make_bitmap!(new_type: EndpointCharacteristics, underlying_flag_type: EndpointCharacteristicsBit, repr: u32, bit_skipper: |i| i != 7 && i != 14 && i != 15 && i != 27);
+
+pub struct EndpointCapabilities {
+    bits: u32,
 }
 
-make_bitmap!(new_type: EndpointCharacteristics, underlying_flag_type: EndpointCharacteristicsBit, repr: u32, bit_skipper: |i| i != 7 && i != 14 && i != 15 && i != 27);
+#[repr(C)]
+pub struct RawQueueHead {
+    queue_head_link_pointer: VolatileValue<RawQueueHeadPointer>,
+    endpoint_characteristics: VolatileValue<EndpointCharacteristics>,
+    endpoint_capabilities: VolatileValue<EndpointCapabilities>,
+    current_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
+    next_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
+    alternate_next_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
+    execution_cache_area: VolatileValue<QueueTransferDescriptorToken>,
+    word7: VolatileValue<u32>,
+    word8: VolatileValue<u32>,
+    word9: VolatileValue<u32>,
+    word10: VolatileValue<u32>,
+    word11: VolatileValue<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QueueHeadIndex(usize);
+
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+pub enum LogicalQueueHeadPointer {
+    IsochronousTransferDescriptor,
+    QueueHead(QueueHeadIndex),
+    SplitTransactionIsochronousTransferDescriptor,
+    FrameSpanTraversalNode,
+}
+
+#[repr(C, align(32))]
+pub struct QueueHead {
+    raw: RawQueueHead,
+    pool_index: QueueHeadIndex,
+    queue_head_horizontal_link_pointer: Option<LogicalQueueHeadPointer>,
+    next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
+    alternate_next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C, align(32))]
+pub struct BlankQueueHead([u32; size_of::<QueueHead>() / (u32::BITS / u8::BITS) as usize]);
 
 impl EndpointCharacteristics {
     pub fn get_nak_count_reload(&self) -> u8 {
@@ -180,32 +148,6 @@ impl EndpointCharacteristics {
 
     pub fn set_device_address(&mut self, device_address: Address) {
         bits::set_bits!(bits_expr: self.bits, value: u8::from(device_address), n_bits: 7, starts_at_bit: 0, bits_expr_ty: u32);
-    }
-}
-
-pub struct EndpointCapabilities {
-    bits: u32,
-}
-
-impl Display for EndpointCapabilities {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(
-            f,
-            "Interrupt Schedule Mask: {:#04x}",
-            self.get_interrupt_schedule_mask()
-        )?;
-        writeln!(
-            f,
-            "Split Completion Mask: {:#04x}",
-            self.get_split_completion_mask()
-        )?;
-        writeln!(f, "Hub Address: {}", self.get_hub_address())?;
-        writeln!(f, "Port Number: {}", self.get_port_number())?;
-        write!(
-            f,
-            "High Bandwidth Pipe Multiplier: {}",
-            self.get_high_bandwidth_pipe_multiplier()
-        )
     }
 }
 
@@ -261,52 +203,6 @@ impl EndpointCapabilities {
 
     pub fn empty() -> EndpointCapabilities {
         Self { bits: 0 }
-    }
-}
-
-#[repr(C)]
-pub struct RawQueueHead {
-    queue_head_link_pointer: VolatileValue<RawQueueHeadPointer>,
-    endpoint_characteristics: VolatileValue<EndpointCharacteristics>,
-    endpoint_capabilities: VolatileValue<EndpointCapabilities>,
-    current_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
-    next_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
-    alternate_next_qtd_pointer: VolatileValue<QueueTransferDescriptorPointer>,
-    execution_cache_area: VolatileValue<QueueTransferDescriptorToken>,
-    word7: VolatileValue<u32>,
-    word8: VolatileValue<u32>,
-    word9: VolatileValue<u32>,
-    word10: VolatileValue<u32>,
-    word11: VolatileValue<u32>,
-}
-
-impl core::fmt::Display for RawQueueHead {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(
-            f,
-            "Queue Head Link Pointer: {}",
-            self.queue_head_link_pointer
-        )?;
-        writeln!(
-            f,
-            "Endpoint Characteristics: {}",
-            self.endpoint_characteristics
-        )?;
-        writeln!(f, "Endpoint Capabilities: {}", self.endpoint_capabilities)?;
-        writeln!(f, "Current qTD Pointer: {}", self.current_qtd_pointer)?;
-        writeln!(f, "Next qTD Pointer: {}", self.next_qtd_pointer)?;
-        writeln!(
-            f,
-            "Alternate Next qTD Pointer: {}",
-            self.alternate_next_qtd_pointer
-        )?;
-        writeln!(f, "Execution Cache Area: {}", self.execution_cache_area)?;
-        writeln!(f, "Word 7: {:#x}", self.word7.read())?;
-        writeln!(f, "Word 8: {:#x}", self.word8.read())?;
-        writeln!(f, "Word 9: {:#x}", self.word9.read())?;
-        writeln!(f, "Word 10: {:#x}", self.word10.read())?;
-        writeln!(f, "Word 11: {:#x}", self.word11.read())?;
-        Ok(())
     }
 }
 
@@ -381,61 +277,6 @@ impl RawQueueHead {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct QueueHeadIndex(usize);
-
-impl From<QueueHeadIndex> for usize {
-    fn from(value: QueueHeadIndex) -> Self {
-        value.0
-    }
-}
-
-impl From<usize> for QueueHeadIndex {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-#[repr(u8)]
-pub enum LogicalQueueHeadPointer {
-    IsochronousTransferDescriptor,
-    QueueHead(QueueHeadIndex),
-    SplitTransactionIsochronousTransferDescriptor,
-    FrameSpanTraversalNode,
-}
-
-#[repr(C, align(32))]
-pub struct QueueHead {
-    raw: RawQueueHead,
-    pool_index: QueueHeadIndex,
-    queue_head_horizontal_link_pointer: Option<LogicalQueueHeadPointer>,
-    next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
-    alternate_next_queue_transfer_descriptor_index: Option<QueueTransferDescriptorIndex>,
-}
-
-impl core::fmt::Display for QueueHead {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Raw: {}", self.raw)?;
-        writeln!(
-            f,
-            "QH horizontal link pointer: {:?}",
-            self.queue_head_horizontal_link_pointer
-        )?;
-        writeln!(
-            f,
-            "qTD next pointer: {:?}",
-            self.next_queue_transfer_descriptor_index
-        )?;
-        writeln!(
-            f,
-            "qTD alternate next pointer: {:?}",
-            self.alternate_next_queue_transfer_descriptor_index
-        )?;
-        Ok(())
-    }
-}
-
 impl QueueHead {
     pub fn init(&mut self, self_index: QueueHeadIndex) {
         self.raw.clear();
@@ -503,9 +344,170 @@ impl QueueHead {
     }
 }
 
-impl DerefMut for QueueHead {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.raw
+impl BlankQueueHead {
+    pub const fn blank() -> Self {
+        Self([0; _])
+    }
+}
+
+impl From<QueueHeadPointer> for RawQueueHeadPointer {
+    fn from(value: QueueHeadPointer) -> Self {
+        match value {
+            QueueHeadPointer::IsochronousTransferDescriptor => todo!(),
+            QueueHeadPointer::QueueHead(queue_head) => {
+                let mut result = Self::default();
+                bits::set_bits!(bits_expr: result.bits, value: 0b01, n_bits: 2, starts_at_bit: 1, bits_expr_ty: u32);
+                // FIXME: today addresses are always physical, one day they'll be virtual. This will break
+                // that day
+                bits::set_bits!(bits_expr: result.bits, value: queue_head as u32 >> 5, n_bits: 27, starts_at_bit: 5, bits_expr_ty: u32);
+                result
+            }
+            QueueHeadPointer::SplitTransactionIsochronousTransferDescriptor => todo!(),
+            QueueHeadPointer::FrameSpanTraversalNode => todo!(),
+        }
+    }
+}
+
+impl From<QueueHeadIndex> for usize {
+    fn from(value: QueueHeadIndex) -> Self {
+        value.0
+    }
+}
+
+impl From<usize> for QueueHeadIndex {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl core::fmt::Display for RawQueueHeadPointer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Val: {:#x}, Address: {:#x}, Type: {:#b}, Terminate: {}",
+            self.bits,
+            bits::get_bits!(bits_expr: self.bits, n_bits: 27, starts_at_bit: 5, return_ty: u32)
+                << 5,
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 1, return_ty: u32),
+            self.is_set(QueueHeadPointerBit::Terminate)
+        )
+    }
+}
+
+impl Display for EndpointSpeed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EndpointSpeed::FullSpeed => write!(f, "Full Speed"),
+            EndpointSpeed::LowSpeed => write!(f, "Low Speed"),
+            EndpointSpeed::HighSpeed => write!(f, "High Speed"),
+            EndpointSpeed::Reserved => write!(f, "Reserved"),
+        }
+    }
+}
+
+impl Display for HighBandwidthPipeMultiplier {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HighBandwidthPipeMultiplier::Reserved => write!(f, "Reserved"),
+            HighBandwidthPipeMultiplier::OneTransactionPerMicroFrame => {
+                write!(f, "1 transaction per micro-frame")
+            }
+            HighBandwidthPipeMultiplier::TwoTransactionPerMicroFrame => {
+                write!(f, "2 transactions per micro-frame")
+            }
+            HighBandwidthPipeMultiplier::ThreeTransactionPerMicroFrame => {
+                write!(f, "3 transactions per micro-frame")
+            }
+        }
+    }
+}
+
+impl core::fmt::Display for EndpointCharacteristicsBit {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EndpointCharacteristicsBit::InactivateOnNextTransaction => {
+                write!(f, "Invalidate on Next Transaction")
+            }
+            EndpointCharacteristicsBit::DataToggleControl => write!(f, "DataToggleControl"),
+            EndpointCharacteristicsBit::HeadOfReclamationListFlag => {
+                write!(f, "HeadOfReclamationListFlag")
+            }
+            EndpointCharacteristicsBit::ControlEndpoint => write!(f, "ControlEndpoint"),
+        }
+    }
+}
+
+impl Display for EndpointCapabilities {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(
+            f,
+            "Interrupt Schedule Mask: {:#04x}",
+            self.get_interrupt_schedule_mask()
+        )?;
+        writeln!(
+            f,
+            "Split Completion Mask: {:#04x}",
+            self.get_split_completion_mask()
+        )?;
+        writeln!(f, "Hub Address: {}", self.get_hub_address())?;
+        writeln!(f, "Port Number: {}", self.get_port_number())?;
+        write!(
+            f,
+            "High Bandwidth Pipe Multiplier: {}",
+            self.get_high_bandwidth_pipe_multiplier()
+        )
+    }
+}
+
+impl core::fmt::Display for RawQueueHead {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(
+            f,
+            "Queue Head Link Pointer: {}",
+            self.queue_head_link_pointer
+        )?;
+        writeln!(
+            f,
+            "Endpoint Characteristics: {}",
+            self.endpoint_characteristics
+        )?;
+        writeln!(f, "Endpoint Capabilities: {}", self.endpoint_capabilities)?;
+        writeln!(f, "Current qTD Pointer: {}", self.current_qtd_pointer)?;
+        writeln!(f, "Next qTD Pointer: {}", self.next_qtd_pointer)?;
+        writeln!(
+            f,
+            "Alternate Next qTD Pointer: {}",
+            self.alternate_next_qtd_pointer
+        )?;
+        writeln!(f, "Execution Cache Area: {}", self.execution_cache_area)?;
+        writeln!(f, "Word 7: {:#x}", self.word7.read())?;
+        writeln!(f, "Word 8: {:#x}", self.word8.read())?;
+        writeln!(f, "Word 9: {:#x}", self.word9.read())?;
+        writeln!(f, "Word 10: {:#x}", self.word10.read())?;
+        writeln!(f, "Word 11: {:#x}", self.word11.read())?;
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for QueueHead {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Raw: {}", self.raw)?;
+        writeln!(
+            f,
+            "QH horizontal link pointer: {:?}",
+            self.queue_head_horizontal_link_pointer
+        )?;
+        writeln!(
+            f,
+            "qTD next pointer: {:?}",
+            self.next_queue_transfer_descriptor_index
+        )?;
+        writeln!(
+            f,
+            "qTD alternate next pointer: {:?}",
+            self.alternate_next_queue_transfer_descriptor_index
+        )?;
+        Ok(())
     }
 }
 
@@ -517,13 +519,9 @@ impl Deref for QueueHead {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C, align(32))]
-pub struct BlankQueueHead([u32; size_of::<QueueHead>() / (u32::BITS / u8::BITS) as usize]);
-
-impl BlankQueueHead {
-    pub const fn blank() -> Self {
-        Self([0; _])
+impl DerefMut for QueueHead {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.raw
     }
 }
 

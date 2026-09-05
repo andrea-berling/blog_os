@@ -48,25 +48,6 @@ pub enum HostBus {
     Isa { base_address: u16 },
 }
 
-impl Display for HostBus {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match &self {
-            HostBus::Pci {
-                bus,
-                slot,
-                function,
-            } => writeln!(
-                f,
-                "  Host Bus: PCI (Bus: {}, Slot: {}, Function: {})",
-                bus, slot, function
-            ),
-            HostBus::Isa { base_address } => {
-                writeln!(f, "  Host Bus: ISA (Base Address: {:#X})", base_address)
-            }
-        }
-    }
-}
-
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub enum Interface {
@@ -91,30 +72,6 @@ pub enum Interface {
     },
 }
 
-impl Display for Interface {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match &self {
-            Interface::Ata { is_slave } => {
-                writeln!(f, "  Interface: ATA (Is Slave: {})", is_slave)
-            }
-            Interface::Atapi {
-                is_slave,
-                logical_unit_number,
-            } => writeln!(
-                f,
-                "  Interface: ATAPI (Is Slave: {}, LUN: {})",
-                is_slave, logical_unit_number
-            ),
-            Interface::Scsi {
-                logical_unit_number,
-            } => writeln!(f, "  Interface: SCSI (LUN: {})", logical_unit_number),
-            Interface::Usb { tbd } => writeln!(f, "  Interface: USB (TBD: {})", tbd),
-            Interface::_1394 { guid } => writeln!(f, "  Interface: 1394 (GUID: {:#X})", guid),
-            Interface::Fibre { wwn } => writeln!(f, "  Interface: FIBRE (WWN: {:#X})", wwn),
-        }
-    }
-}
-
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub struct DevicePathInformation {
@@ -122,11 +79,122 @@ pub struct DevicePathInformation {
     interface: Interface,
 }
 
-impl Display for DevicePathInformation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Device Path Information:")?;
-        write!(f, "{}", self.host_bus)?;
-        write!(f, "{}", self.interface)
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u16)]
+pub enum InfoFlagType {
+    DmaBoundaryErrorsHandledTransparently = 0x1,
+    SuppliedGeometryValid = 0x2,
+    Removable = 0x4,
+    SupportsWriteWithVerify = 0x8,
+    SupportsLineChange = 0x10,
+    Lockable = 0x20,
+    NoMediaPresent = 0x40,
+}
+
+make_bitmap!(new_type: InfoFlags, underlying_flag_type: InfoFlagType, repr: u16, bit_skipper: |i| i > 6);
+
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, Default)]
+pub struct DriveParameters {
+    buffer_size: u16,
+    information_flags: InfoFlags,
+    cylinders: u32,
+    heads: u32,
+    sectors_per_track: u32,
+    sectors: u64,
+    bytes_per_sector: u16,
+    fixed_disk_parameter_table: Option<FixedDiskParameterTable>,
+    device_path_information: Option<DevicePathInformation>,
+}
+
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u8)]
+pub enum HeadRegisterFlagType {
+    Slave = 0x10,
+    LBAEnabled = 0x40,
+}
+
+make_bitmap!(new_type: HeadRegisterUpperNibble, underlying_flag_type: HeadRegisterFlagType, repr: u8, bit_skipper: |i| i != 4 && i != 6);
+
+#[derive(TryFromBytes)]
+#[repr(C)]
+pub struct FixedDiskParameterTableRaw {
+    io_port_base: U16<LE>,
+    control_port_base: U16<LE>,
+    head_prefix: u8,
+    internal: u8,
+    irq: u8,
+    sector_count: u8,
+    dma_channel_type: u8,
+    pio_type: u8,
+    hardware_specific_option_flags: U16<LE>,
+    unused: U16<LE>,
+    extension_revision: u8,
+    checksum: u8,
+}
+
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, Default)]
+pub struct FixedDiskParameterTable {
+    io_port_base: u16,
+    control_port_base: u16,
+    head_prefix: HeadRegisterUpperNibble,
+    irq: u8,
+    sector_count: u8,
+    dma_channel: u8,
+    dma_type: u8,
+    pio_type: u8,
+    hardware_specific_option_flags: HWSpecificOptionFlags,
+    extension_revision: u8,
+    checksum: u8,
+}
+
+#[derive(TryFromPrimitive, Clone, Copy)]
+#[repr(u16)]
+pub enum HWSpecificOptionFlagType {
+    FastPIO = 0x1,
+    FastDMA = 0x2,
+    BlockPIO = 0x4,
+    CHSTranslation = 0x8,
+    LBATranslation = 0x10,
+    RemovableMedia = 0x20,
+    Atapi = 0x40,
+    _32BitTransferMode = 0x80,
+    AtapiUsesInterruptDRQ = 0x100,
+    TranslationTypeFirstBit = 0x200,
+    TranslationTypeSecondBit = 0x400,
+}
+
+make_bitmap!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
+
+impl DriveParameters {
+    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> error::Result<()> {
+        if fdbt_address == u32::MAX {
+            // Nothing to do, the fdbt address is invalid
+            return Ok(());
+        }
+
+        if self.buffer_size as usize != size_of::<DriveParametersRaw>() {
+            return Err(Error::new(
+                Fault::NotEnoughBytesFor("fixed disk parameter table"),
+                Context::Parsing,
+                Facility::EDDFixedDiskParameterTable,
+            ));
+        }
+        // Address is in seg:offset format, with offset coming first
+        fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
+
+        self.fixed_disk_parameter_table = Some(FixedDiskParameterTable::try_from(
+            //SAFETY: If we got to this point, the fdbt address is valid and points to a
+            //FixedDiskParameterTableRaw sized byte array
+            unsafe {
+                core::slice::from_raw_parts(
+                    fdbt_address as *const u8,
+                    size_of::<FixedDiskParameterTableRaw>(),
+                )
+            },
+        )?);
+        Ok(())
     }
 }
 
@@ -268,108 +336,6 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
     }
 }
 
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u16)]
-pub enum InfoFlagType {
-    DmaBoundaryErrorsHandledTransparently = 0x1,
-    SuppliedGeometryValid = 0x2,
-    Removable = 0x4,
-    SupportsWriteWithVerify = 0x8,
-    SupportsLineChange = 0x10,
-    Lockable = 0x20,
-    NoMediaPresent = 0x40,
-}
-
-impl Display for InfoFlagType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            InfoFlagType::DmaBoundaryErrorsHandledTransparently => {
-                write!(f, "DMA_BOUNDARY_ERRORS_HANDLED_TRANSPARENTLY")
-            }
-            InfoFlagType::SuppliedGeometryValid => write!(f, "SUPPLIED_GEOMETRY_VALID"),
-            InfoFlagType::Removable => write!(f, "REMOVABLE"),
-            InfoFlagType::SupportsWriteWithVerify => write!(f, "SUPPORTS_WRITE_WITH_VERIFY"),
-            InfoFlagType::SupportsLineChange => write!(f, "SUPPORTS_LINE_CHANGE"),
-            InfoFlagType::Lockable => write!(f, "LOCKABLE"),
-            InfoFlagType::NoMediaPresent => write!(f, "NO_MEDIA_PRESENT"),
-        }
-    }
-}
-
-make_bitmap!(new_type: InfoFlags, underlying_flag_type: InfoFlagType, repr: u16, bit_skipper: |i| i > 6);
-
-#[cfg_attr(test, derive(PartialEq, Eq))]
-#[derive(Debug, Default)]
-pub struct DriveParameters {
-    buffer_size: u16,
-    information_flags: InfoFlags,
-    cylinders: u32,
-    heads: u32,
-    sectors_per_track: u32,
-    sectors: u64,
-    bytes_per_sector: u16,
-    fixed_disk_parameter_table: Option<FixedDiskParameterTable>,
-    device_path_information: Option<DevicePathInformation>,
-}
-
-impl DriveParameters {
-    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> error::Result<()> {
-        if fdbt_address == u32::MAX {
-            // Nothing to do, the fdbt address is invalid
-            return Ok(());
-        }
-
-        if self.buffer_size as usize != size_of::<DriveParametersRaw>() {
-            return Err(Error::new(
-                Fault::NotEnoughBytesFor("fixed disk parameter table"),
-                Context::Parsing,
-                Facility::EDDFixedDiskParameterTable,
-            ));
-        }
-        // Address is in seg:offset format, with offset coming first
-        fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
-
-        self.fixed_disk_parameter_table = Some(FixedDiskParameterTable::try_from(
-            //SAFETY: If we got to this point, the fdbt address is valid and points to a
-            //FixedDiskParameterTableRaw sized byte array
-            unsafe {
-                core::slice::from_raw_parts(
-                    fdbt_address as *const u8,
-                    size_of::<FixedDiskParameterTableRaw>(),
-                )
-            },
-        )?);
-        Ok(())
-    }
-}
-
-impl Display for DriveParameters {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Drive Parameters:")?;
-        writeln!(f, "  Buffer Size: {}", self.buffer_size)?;
-        writeln!(f, "  Information Flags: {}", self.information_flags)?;
-        writeln!(f, "  Cylinders: {}", self.cylinders)?;
-        writeln!(f, "  Heads: {}", self.heads)?;
-        writeln!(f, "  Sectors per Track: {}", self.sectors_per_track)?;
-        writeln!(f, "  Total Sectors: {}", self.sectors)?;
-        writeln!(f, "  Bytes per Sector: {}", self.bytes_per_sector)?;
-        match &self.fixed_disk_parameter_table {
-            Some(configuration_parameters) => {
-                write!(f, "{configuration_parameters}")?;
-            }
-            None => {
-                writeln!(f, "  Configuration Parameters: Not Present")?;
-            }
-        }
-        match &self.device_path_information {
-            Some(device_path_information) => {
-                write!(f, "{device_path_information}")
-            }
-            None => writeln!(f, "  Device Path Information: Not Present"),
-        }
-    }
-}
-
 impl TryFrom<&DriveParametersRaw> for DriveParameters {
     type Error = Error;
 
@@ -484,40 +450,6 @@ impl TryFrom<&[u8]> for DriveParameters {
     }
 }
 
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u8)]
-pub enum HeadRegisterFlagType {
-    Slave = 0x10,
-    LBAEnabled = 0x40,
-}
-
-impl Display for HeadRegisterFlagType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            HeadRegisterFlagType::Slave => write!(f, "SLAVE"),
-            HeadRegisterFlagType::LBAEnabled => write!(f, "LBA_ENABLED"),
-        }
-    }
-}
-
-make_bitmap!(new_type: HeadRegisterUpperNibble, underlying_flag_type: HeadRegisterFlagType, repr: u8, bit_skipper: |i| i != 4 && i != 6);
-
-#[cfg_attr(test, derive(PartialEq, Eq))]
-#[derive(Debug, Default)]
-pub struct FixedDiskParameterTable {
-    io_port_base: u16,
-    control_port_base: u16,
-    head_prefix: HeadRegisterUpperNibble,
-    irq: u8,
-    sector_count: u8,
-    dma_channel: u8,
-    dma_type: u8,
-    pio_type: u8,
-    hardware_specific_option_flags: HWSpecificOptionFlags,
-    extension_revision: u8,
-    checksum: u8,
-}
-
 impl TryFrom<&[u8]> for FixedDiskParameterTable {
     type Error = Error;
 
@@ -607,6 +539,109 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
     }
 }
 
+impl Display for HostBus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self {
+            HostBus::Pci {
+                bus,
+                slot,
+                function,
+            } => writeln!(
+                f,
+                "  Host Bus: PCI (Bus: {}, Slot: {}, Function: {})",
+                bus, slot, function
+            ),
+            HostBus::Isa { base_address } => {
+                writeln!(f, "  Host Bus: ISA (Base Address: {:#X})", base_address)
+            }
+        }
+    }
+}
+
+impl Display for Interface {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self {
+            Interface::Ata { is_slave } => {
+                writeln!(f, "  Interface: ATA (Is Slave: {})", is_slave)
+            }
+            Interface::Atapi {
+                is_slave,
+                logical_unit_number,
+            } => writeln!(
+                f,
+                "  Interface: ATAPI (Is Slave: {}, LUN: {})",
+                is_slave, logical_unit_number
+            ),
+            Interface::Scsi {
+                logical_unit_number,
+            } => writeln!(f, "  Interface: SCSI (LUN: {})", logical_unit_number),
+            Interface::Usb { tbd } => writeln!(f, "  Interface: USB (TBD: {})", tbd),
+            Interface::_1394 { guid } => writeln!(f, "  Interface: 1394 (GUID: {:#X})", guid),
+            Interface::Fibre { wwn } => writeln!(f, "  Interface: FIBRE (WWN: {:#X})", wwn),
+        }
+    }
+}
+
+impl Display for DevicePathInformation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Device Path Information:")?;
+        write!(f, "{}", self.host_bus)?;
+        write!(f, "{}", self.interface)
+    }
+}
+
+impl Display for InfoFlagType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            InfoFlagType::DmaBoundaryErrorsHandledTransparently => {
+                write!(f, "DMA_BOUNDARY_ERRORS_HANDLED_TRANSPARENTLY")
+            }
+            InfoFlagType::SuppliedGeometryValid => write!(f, "SUPPLIED_GEOMETRY_VALID"),
+            InfoFlagType::Removable => write!(f, "REMOVABLE"),
+            InfoFlagType::SupportsWriteWithVerify => write!(f, "SUPPORTS_WRITE_WITH_VERIFY"),
+            InfoFlagType::SupportsLineChange => write!(f, "SUPPORTS_LINE_CHANGE"),
+            InfoFlagType::Lockable => write!(f, "LOCKABLE"),
+            InfoFlagType::NoMediaPresent => write!(f, "NO_MEDIA_PRESENT"),
+        }
+    }
+}
+
+impl Display for DriveParameters {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Drive Parameters:")?;
+        writeln!(f, "  Buffer Size: {}", self.buffer_size)?;
+        writeln!(f, "  Information Flags: {}", self.information_flags)?;
+        writeln!(f, "  Cylinders: {}", self.cylinders)?;
+        writeln!(f, "  Heads: {}", self.heads)?;
+        writeln!(f, "  Sectors per Track: {}", self.sectors_per_track)?;
+        writeln!(f, "  Total Sectors: {}", self.sectors)?;
+        writeln!(f, "  Bytes per Sector: {}", self.bytes_per_sector)?;
+        match &self.fixed_disk_parameter_table {
+            Some(configuration_parameters) => {
+                write!(f, "{configuration_parameters}")?;
+            }
+            None => {
+                writeln!(f, "  Configuration Parameters: Not Present")?;
+            }
+        }
+        match &self.device_path_information {
+            Some(device_path_information) => {
+                write!(f, "{device_path_information}")
+            }
+            None => writeln!(f, "  Device Path Information: Not Present"),
+        }
+    }
+}
+
+impl Display for HeadRegisterFlagType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HeadRegisterFlagType::Slave => write!(f, "SLAVE"),
+            HeadRegisterFlagType::LBAEnabled => write!(f, "LBA_ENABLED"),
+        }
+    }
+}
+
 impl Display for FixedDiskParameterTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(f, "Fixed Disk Parameter Table:")?;
@@ -626,39 +661,6 @@ impl Display for FixedDiskParameterTable {
         writeln!(f, "  Extension Revision: {}", self.extension_revision)?;
         writeln!(f, "  Checksum: {:#X}", self.checksum)
     }
-}
-
-#[derive(TryFromBytes)]
-#[repr(C)]
-pub struct FixedDiskParameterTableRaw {
-    io_port_base: U16<LE>,
-    control_port_base: U16<LE>,
-    head_prefix: u8,
-    internal: u8,
-    irq: u8,
-    sector_count: u8,
-    dma_channel_type: u8,
-    pio_type: u8,
-    hardware_specific_option_flags: U16<LE>,
-    unused: U16<LE>,
-    extension_revision: u8,
-    checksum: u8,
-}
-
-#[derive(TryFromPrimitive, Clone, Copy)]
-#[repr(u16)]
-pub enum HWSpecificOptionFlagType {
-    FastPIO = 0x1,
-    FastDMA = 0x2,
-    BlockPIO = 0x4,
-    CHSTranslation = 0x8,
-    LBATranslation = 0x10,
-    RemovableMedia = 0x20,
-    Atapi = 0x40,
-    _32BitTransferMode = 0x80,
-    AtapiUsesInterruptDRQ = 0x100,
-    TranslationTypeFirstBit = 0x200,
-    TranslationTypeSecondBit = 0x400,
 }
 
 impl Display for HWSpecificOptionFlagType {
@@ -684,8 +686,6 @@ impl Display for HWSpecificOptionFlagType {
         }
     }
 }
-
-make_bitmap!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
 
 #[cfg(test)]
 mod tests {

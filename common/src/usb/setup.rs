@@ -34,33 +34,6 @@ pub enum BmRequestTypeBit {
 
 make_bitmap!(new_type: BmRequestType, underlying_flag_type: BmRequestTypeBit, repr: u8, nodisplay);
 
-impl BmRequestType {
-    /// Returns a BmRequestType fit for a SET_ADDRESS request
-    pub fn set_address() -> Self {
-        let mut result = Self::default();
-        result.set_type(RequestType::Standard);
-        result.set_recipient(Recipient::Device);
-        result.clear_flag(BmRequestTypeBit::DeviceToHost);
-        result
-    }
-
-    pub fn get_descriptor() -> Self {
-        let mut result = Self::default();
-        result.set_type(RequestType::Standard);
-        result.set_recipient(Recipient::Device);
-        result.set_flag(BmRequestTypeBit::DeviceToHost);
-        result
-    }
-
-    fn set_type(&mut self, r#type: RequestType) {
-        bits::set_bits!(bits_expr: self.bits, value: r#type, n_bits: 2, starts_at_bit: 5, bits_expr_ty: u8);
-    }
-
-    fn set_recipient(&mut self, recipient: Recipient) {
-        bits::set_bits!(bits_expr: self.bits, value: recipient, n_bits: 5, starts_at_bit: 0, bits_expr_ty: u8);
-    }
-}
-
 #[repr(u8)]
 pub enum Request {
     GetStatus,
@@ -90,38 +63,12 @@ pub enum DescriptorType {
     InterfacePower,
 }
 
-impl Display for DescriptorType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            DescriptorType::Device => write!(f, "Device"),
-            DescriptorType::Configuration => write!(f, "Configuration"),
-            DescriptorType::String => write!(f, "String"),
-            DescriptorType::Interface => write!(f, "Interface"),
-            DescriptorType::Endpoint => write!(f, "Endpoint"),
-            DescriptorType::DeviceQualifier => write!(f, "Device Qualifier"),
-            DescriptorType::OtherSpeedConfiguration => write!(f, "Other Speed Configuration"),
-            DescriptorType::InterfacePower => write!(f, "Interface Power"),
-        }
-    }
-}
-
 #[derive(TryFromBytes)]
 pub struct VendorId([u8; 2]);
-
-impl Display for VendorId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:04x}", u16::from_le_bytes(self.0))
-    }
-}
 
 #[derive(TryFromBytes)]
 pub struct ProductId([u8; 2]);
 
-impl Display for ProductId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:04x}", u16::from_le_bytes(self.0))
-    }
-}
 #[derive(TryFromBytes)]
 #[repr(C)]
 pub struct DeviceDescriptor {
@@ -141,6 +88,54 @@ pub struct DeviceDescriptor {
     n_configurations: u8,
 }
 
+pub enum Descriptor {
+    Device(DeviceDescriptor),
+}
+
+#[repr(C)]
+pub struct SetupData {
+    request_type: BmRequestType,
+    request: Request,
+    value: u16,
+    index: u16,
+    length: u16,
+}
+
+pub struct LanguageId;
+
+#[derive(Clone, Copy, Default)]
+pub struct Address(u8);
+
+#[derive(Clone, Copy)]
+pub struct MaxPacketLength(u16);
+
+impl BmRequestType {
+    /// Returns a BmRequestType fit for a SET_ADDRESS request
+    pub fn set_address() -> Self {
+        let mut result = Self::default();
+        result.set_type(RequestType::Standard);
+        result.set_recipient(Recipient::Device);
+        result.clear_flag(BmRequestTypeBit::DeviceToHost);
+        result
+    }
+
+    pub fn get_descriptor() -> Self {
+        let mut result = Self::default();
+        result.set_type(RequestType::Standard);
+        result.set_recipient(Recipient::Device);
+        result.set_flag(BmRequestTypeBit::DeviceToHost);
+        result
+    }
+
+    fn set_type(&mut self, r#type: RequestType) {
+        bits::set_bits!(bits_expr: self.bits, value: r#type, n_bits: 2, starts_at_bit: 5, bits_expr_ty: u8);
+    }
+
+    fn set_recipient(&mut self, recipient: Recipient) {
+        bits::set_bits!(bits_expr: self.bits, value: recipient, n_bits: 5, starts_at_bit: 0, bits_expr_ty: u8);
+    }
+}
+
 impl DeviceDescriptor {
     pub fn get_class_type(&self) -> Option<ClassType> {
         ClassType::try_from(self.class).ok()
@@ -148,6 +143,116 @@ impl DeviceDescriptor {
 
     pub fn max_packet_size_endpoint_0_offset() -> usize {
         core::mem::offset_of!(DeviceDescriptor, max_packet_size_endpoint_0)
+    }
+}
+
+impl Descriptor {
+    pub fn descriptor_type(&self) -> DescriptorType {
+        match self {
+            Descriptor::Device(_) => DescriptorType::Device,
+        }
+    }
+}
+
+impl SetupData {
+    pub fn set_address(address: Address) -> SetupData {
+        Self {
+            request_type: BmRequestType::set_address(),
+            request: Request::SetAddress,
+            value: u8::from(address).into(),
+            index: 0,
+            length: 0,
+        }
+    }
+
+    pub fn get_descriptor(
+        descriptor_type: DescriptorType,
+        descriptor_index: usize,
+        lang_id: Option<LanguageId>,
+        descriptor_length: u16,
+    ) -> error::Result<SetupData> {
+        let mut value = 0u16;
+        bits::set_bits!(bits_expr: value, value: descriptor_type, n_bits: 8, starts_at_bit: 8, bits_expr_ty: u16);
+        bits::set_bits!(bits_expr: value, value: descriptor_index, n_bits: 8, starts_at_bit: 0, bits_expr_ty: u16);
+        Ok(Self {
+            request_type: BmRequestType::get_descriptor(),
+            request: Request::GetDescriptor,
+            value,
+            index: lang_id.map_or(0, |_| todo!()),
+            length: descriptor_length,
+        })
+    }
+}
+
+impl MaxPacketLength {
+    /// Initial MaxPacketSize for the default control pipe (endpoint 0), before the
+    /// device's real `bMaxPacketSize0` is known. 64 is the maximum legal value for a
+    /// high-speed control endpoint, so it is guaranteed to accommodate the fixed 8-byte
+    /// SETUP packet and every legal response.
+    pub const DEFAULT_CONTROL_PIPE_MAX_PACKET_LENGTH: Self = Self(64);
+}
+
+impl TryFrom<u8> for Address {
+    type Error = error::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value > 127 {
+            return Err(Fault::InvalidUSBAddress(value).into());
+        }
+        Ok(Self(value))
+    }
+}
+
+impl From<Address> for u8 {
+    fn from(value: Address) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<u16> for MaxPacketLength {
+    type Error = error::Error;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        // 8 is the smallest legal wMaxPacketSize (low-speed control); 1024 is the
+        // largest (high-speed bulk/interrupt/isochronous). 0 in particular is invalid
+        // even though it fits the 11-bit field
+        if !(SMALLEST_LEGAL_MAX_PACKET_SIZE..=LARGEST_LEGAL_MAX_PACKET_SIZE).contains(&value) {
+            return Err(Fault::InvalidUSBMaxPacketLength(value).into());
+        }
+        Ok(Self(value))
+    }
+}
+
+impl From<MaxPacketLength> for u16 {
+    fn from(value: MaxPacketLength) -> Self {
+        value.0
+    }
+}
+
+impl Display for DescriptorType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DescriptorType::Device => write!(f, "Device"),
+            DescriptorType::Configuration => write!(f, "Configuration"),
+            DescriptorType::String => write!(f, "String"),
+            DescriptorType::Interface => write!(f, "Interface"),
+            DescriptorType::Endpoint => write!(f, "Endpoint"),
+            DescriptorType::DeviceQualifier => write!(f, "Device Qualifier"),
+            DescriptorType::OtherSpeedConfiguration => write!(f, "Other Speed Configuration"),
+            DescriptorType::InterfacePower => write!(f, "Interface Power"),
+        }
+    }
+}
+
+impl Display for VendorId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:04x}", u16::from_le_bytes(self.0))
+    }
+}
+
+impl Display for ProductId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:04x}", u16::from_le_bytes(self.0))
     }
 }
 
@@ -198,112 +303,8 @@ impl Display for DeviceDescriptor {
     }
 }
 
-pub enum Descriptor {
-    Device(DeviceDescriptor),
-}
-
-impl Descriptor {
-    pub fn descriptor_type(&self) -> DescriptorType {
-        match self {
-            Descriptor::Device(_) => DescriptorType::Device,
-        }
-    }
-}
-
-#[repr(C)]
-pub struct SetupData {
-    request_type: BmRequestType,
-    request: Request,
-    value: u16,
-    index: u16,
-    length: u16,
-}
-
-pub struct LanguageId;
-
-#[derive(Clone, Copy, Default)]
-pub struct Address(u8);
-
 impl core::fmt::Display for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<u8> for Address {
-    type Error = error::Error;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value > 127 {
-            return Err(Fault::InvalidUSBAddress(value).into());
-        }
-        Ok(Self(value))
-    }
-}
-
-impl From<Address> for u8 {
-    fn from(value: Address) -> Self {
-        value.0
-    }
-}
-
-impl SetupData {
-    pub fn set_address(address: Address) -> SetupData {
-        Self {
-            request_type: BmRequestType::set_address(),
-            request: Request::SetAddress,
-            value: u8::from(address).into(),
-            index: 0,
-            length: 0,
-        }
-    }
-
-    pub fn get_descriptor(
-        descriptor_type: DescriptorType,
-        descriptor_index: usize,
-        lang_id: Option<LanguageId>,
-        descriptor_length: u16,
-    ) -> error::Result<SetupData> {
-        let mut value = 0u16;
-        bits::set_bits!(bits_expr: value, value: descriptor_type, n_bits: 8, starts_at_bit: 8, bits_expr_ty: u16);
-        bits::set_bits!(bits_expr: value, value: descriptor_index, n_bits: 8, starts_at_bit: 0, bits_expr_ty: u16);
-        Ok(Self {
-            request_type: BmRequestType::get_descriptor(),
-            request: Request::GetDescriptor,
-            value,
-            index: lang_id.map_or(0, |_| todo!()),
-            length: descriptor_length,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct MaxPacketLength(u16);
-
-impl MaxPacketLength {
-    /// Initial MaxPacketSize for the default control pipe (endpoint 0), before the
-    /// device's real `bMaxPacketSize0` is known. 64 is the maximum legal value for a
-    /// high-speed control endpoint, so it is guaranteed to accommodate the fixed 8-byte
-    /// SETUP packet and every legal response.
-    pub const DEFAULT_CONTROL_PIPE_MAX_PACKET_LENGTH: Self = Self(64);
-}
-
-impl TryFrom<u16> for MaxPacketLength {
-    type Error = error::Error;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        // 8 is the smallest legal wMaxPacketSize (low-speed control); 1024 is the
-        // largest (high-speed bulk/interrupt/isochronous). 0 in particular is invalid
-        // even though it fits the 11-bit field
-        if !(SMALLEST_LEGAL_MAX_PACKET_SIZE..=LARGEST_LEGAL_MAX_PACKET_SIZE).contains(&value) {
-            return Err(Fault::InvalidUSBMaxPacketLength(value).into());
-        }
-        Ok(Self(value))
-    }
-}
-
-impl From<MaxPacketLength> for u16 {
-    fn from(value: MaxPacketLength) -> Self {
-        value.0
     }
 }

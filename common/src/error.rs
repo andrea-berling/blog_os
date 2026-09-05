@@ -12,31 +12,6 @@ use zerocopy::{TryFromBytes, TryReadError};
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
 
-impl<const N: usize> From<&[u8]> for Prelude<N> {
-    fn from(value: &[u8]) -> Self {
-        let mut inner_value = [0; N];
-        let range = ..min(N, value.len());
-        inner_value
-            .index_mut(range)
-            .copy_from_slice(value.index(range));
-        Self(inner_value)
-    }
-}
-
-impl<const N: usize> core::fmt::Debug for Prelude<N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<const N: usize> core::ops::Deref for Prelude<N> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 #[derive(Clone, Copy, Error, Debug)]
 pub enum Context {
     #[error("None")]
@@ -80,83 +55,6 @@ pub enum Context {
     #[error("Stopping EHCI Schedule Execution")]
     StoppingEHCIScheduleExecution,
 }
-
-impl Error {
-    pub fn new(fault: Fault, context: Context, facility: Facility) -> Self {
-        Self {
-            facility,
-            fault,
-            context,
-        }
-    }
-
-    pub fn with_context(self, context: Context) -> Self {
-        Self { context, ..self }
-    }
-
-    pub fn with_facility(self, facility: Facility) -> Self {
-        Self { facility, ..self }
-    }
-
-    pub fn with_fault(self, fault: Fault) -> Self {
-        Self { fault, ..self }
-    }
-
-    pub const fn blank() -> Self {
-        Self {
-            fault: Fault::None,
-            context: Context::None,
-            facility: Facility::None,
-        }
-    }
-
-    pub fn fault(&self) -> Fault {
-        self.fault
-    }
-}
-
-#[macro_export]
-macro_rules! with {
-    (Facility::$($facility:tt)*) => {
-        |err| err.with_facility(Facility::$($facility)*)
-    };
-    (Fault::$($fault:tt)*) => {
-        |err| err.with_fault(Fault::$($fault)*)
-    };
-    (Context::$($context:tt)*) => {
-        |err| err.with_context(Context::$($context)*)
-    };
-}
-
-pub use with;
-
-pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
-    let mut context = [0u8; N];
-    context[..min(N, context_bytes.len())]
-        .copy_from_slice(&context_bytes[..min(N, context_bytes.len())]);
-    context
-}
-
-pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
-    let dst_type = core::any::type_name::<U>().as_bytes();
-    match err {
-        zerocopy::ConvertError::Alignment(_) => {
-            unreachable!()
-        }
-        zerocopy::ConvertError::Size(size_error) => Fault::InvalidSizeForType {
-            size: size_error.into_src().len(),
-            dst_type_name: dst_type.into(),
-        },
-        zerocopy::ConvertError::Validity(validity_error) => Fault::InvalidValueForType {
-            value: validity_error.into_src().into(),
-            dst_type_name: dst_type.into(),
-        },
-    }
-    .into()
-}
-
-pub const VALUE_LENGTH_BYTES: usize = 20;
-pub const TYPE_NAME_LENGTH_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, Error)]
 pub enum Fault {
@@ -298,26 +196,6 @@ pub struct PciDevice {
     function_number: u8,
 }
 
-impl PciDevice {
-    pub fn new(bus_number: u8, device_number: u8, function_number: u8) -> Self {
-        Self {
-            bus_number,
-            device_number,
-            function_number,
-        }
-    }
-}
-
-impl Display for PciDevice {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{:02x}:{:02x}.{}",
-            self.bus_number, self.device_number, self.function_number
-        )
-    }
-}
-
 #[derive(Clone, Copy, Debug, Error)]
 pub enum Facility {
     #[error("None")]
@@ -370,6 +248,89 @@ pub struct Error {
     facility: Facility, // where did it happen?
 }
 
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub struct ErrorChain<const N: usize> {
+    errors: [Error; N],
+    length: usize,
+    theres_more: bool,
+}
+
+pub const VALUE_LENGTH_BYTES: usize = 20;
+pub const TYPE_NAME_LENGTH_BYTES: usize = 40;
+
+impl PciDevice {
+    pub fn new(bus_number: u8, device_number: u8, function_number: u8) -> Self {
+        Self {
+            bus_number,
+            device_number,
+            function_number,
+        }
+    }
+}
+
+impl Error {
+    pub fn new(fault: Fault, context: Context, facility: Facility) -> Self {
+        Self {
+            facility,
+            fault,
+            context,
+        }
+    }
+
+    pub fn with_context(self, context: Context) -> Self {
+        Self { context, ..self }
+    }
+
+    pub fn with_facility(self, facility: Facility) -> Self {
+        Self { facility, ..self }
+    }
+
+    pub fn with_fault(self, fault: Fault) -> Self {
+        Self { fault, ..self }
+    }
+
+    pub const fn blank() -> Self {
+        Self {
+            fault: Fault::None,
+            context: Context::None,
+            facility: Facility::None,
+        }
+    }
+
+    pub fn fault(&self) -> Fault {
+        self.fault
+    }
+}
+
+impl<const N: usize> ErrorChain<N> {
+    fn push(&mut self, error: Error) {
+        if self.length == N {
+            self.theres_more = true;
+            return;
+        }
+        self.errors[self.length] = error;
+        self.length += 1;
+    }
+
+    fn clear(&mut self) {
+        self.length = 0;
+        self.theres_more = false;
+    }
+}
+
+impl<const N: usize> From<&[u8]> for Prelude<N> {
+    fn from(value: &[u8]) -> Self {
+        let mut inner_value = [0; N];
+        let range = ..min(N, value.len());
+        inner_value
+            .index_mut(range)
+            .copy_from_slice(value.index(range));
+        Self(inner_value)
+    }
+}
+
 impl From<Fault> for Error {
     fn from(fault: Fault) -> Self {
         Error::blank().with_fault(fault)
@@ -388,28 +349,19 @@ impl From<Context> for Error {
     }
 }
 
-pub type Result<T> = core::result::Result<T, Error>;
-
-#[derive(Debug)]
-pub struct ErrorChain<const N: usize> {
-    errors: [Error; N],
-    length: usize,
-    theres_more: bool,
+impl<const N: usize> core::fmt::Debug for Prelude<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
-impl<const N: usize> ErrorChain<N> {
-    fn push(&mut self, error: Error) {
-        if self.length == N {
-            self.theres_more = true;
-            return;
-        }
-        self.errors[self.length] = error;
-        self.length += 1;
-    }
-
-    fn clear(&mut self) {
-        self.length = 0;
-        self.theres_more = false;
+impl Display for PciDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:02x}:{:02x}.{}",
+            self.bus_number, self.device_number, self.function_number
+        )
     }
 }
 
@@ -453,12 +405,53 @@ impl<const N: usize> core::fmt::Display for ErrorChain<N> {
     }
 }
 
-static MAX_ERROR_CHAIN_LENGTH: usize = 5;
-static mut GLOBAL_ERROR_CHAIN: ErrorChain<MAX_ERROR_CHAIN_LENGTH> = ErrorChain {
-    errors: [Error::blank(); MAX_ERROR_CHAIN_LENGTH],
-    length: 0,
-    theres_more: false,
-};
+impl<const N: usize> core::ops::Deref for Prelude<N> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[macro_export]
+macro_rules! with {
+    (Facility::$($facility:tt)*) => {
+        |err| err.with_facility(Facility::$($facility)*)
+    };
+    (Fault::$($fault:tt)*) => {
+        |err| err.with_fault(Fault::$($fault)*)
+    };
+    (Context::$($context:tt)*) => {
+        |err| err.with_context(Context::$($context)*)
+    };
+}
+
+pub use with;
+
+pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
+    let mut context = [0u8; N];
+    context[..min(N, context_bytes.len())]
+        .copy_from_slice(&context_bytes[..min(N, context_bytes.len())]);
+    context
+}
+
+pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
+    let dst_type = core::any::type_name::<U>().as_bytes();
+    match err {
+        zerocopy::ConvertError::Alignment(_) => {
+            unreachable!()
+        }
+        zerocopy::ConvertError::Size(size_error) => Fault::InvalidSizeForType {
+            size: size_error.into_src().len(),
+            dst_type_name: dst_type.into(),
+        },
+        zerocopy::ConvertError::Validity(validity_error) => Fault::InvalidValueForType {
+            value: validity_error.into_src().into(),
+            dst_type_name: dst_type.into(),
+        },
+    }
+    .into()
+}
 
 pub fn get_global_error_chain_no_sync() -> &'static ErrorChain<MAX_ERROR_CHAIN_LENGTH> {
     let error_chain_ptr = &raw const GLOBAL_ERROR_CHAIN;
@@ -481,3 +474,10 @@ pub fn clear_global_error_chain_no_sync() {
 
     error_chain.clear();
 }
+
+static MAX_ERROR_CHAIN_LENGTH: usize = 5;
+static mut GLOBAL_ERROR_CHAIN: ErrorChain<MAX_ERROR_CHAIN_LENGTH> = ErrorChain {
+    errors: [Error::blank(); MAX_ERROR_CHAIN_LENGTH],
+    length: 0,
+    theres_more: false,
+};

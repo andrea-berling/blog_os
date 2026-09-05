@@ -36,6 +36,11 @@ pub struct SmallBitSet<T: Into<usize> + From<usize>> {
     _phantom: PhantomData<T>,
 }
 
+pub struct SmallBitSetPoppingIterator<'a, T: Into<usize> + From<usize>> {
+    bitset: &'a mut SmallBitSet<T>,
+    n_items: usize,
+}
+
 impl<T: Into<usize> + From<usize>> SmallBitSet<T> {
     /// Creates a bit set that can hold indexes below `max_size`
     ///
@@ -174,11 +179,6 @@ impl<T: Into<usize> + From<usize>> SmallBitSet<T> {
             n_items,
         }
     }
-}
-
-pub struct SmallBitSetPoppingIterator<'a, T: Into<usize> + From<usize>> {
-    bitset: &'a mut SmallBitSet<T>,
-    n_items: usize,
 }
 
 impl<T: Into<usize> + From<usize>> Iterator for SmallBitSetPoppingIterator<'_, T> {
