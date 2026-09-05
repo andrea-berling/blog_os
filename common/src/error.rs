@@ -61,14 +61,24 @@ pub enum Context {
     SettingUpProcessor,
     #[error("Waiting for Host Controller ownership to switch")]
     WaitingHostControllerOwnershipSwitch,
-    #[error("Reading descriptor")]
-    ReadingDescriptor,
     #[error("Waiting for USB Port reset bit to clear")]
     WaitingUSBPortResetClear(u8),
     #[error("Halting EHCI controller")]
     HaltingEhciController,
     #[error("Resetting EHCI controller")]
     ResettingEhciController,
+    #[error("Waiting for Async Schedule Enable")]
+    WaitingForAsyncScheduleEnable,
+    #[error("Setting EHCI device address")]
+    SettingEHCIDeviceAddress,
+    #[error("Getting device descriptor")]
+    GettingDeviceDescriptor,
+    #[error("Reading descriptor")]
+    ReadingDescriptor,
+    #[error("Starting EHCI Schedule Execution")]
+    StartingEHCIScheduleExecution,
+    #[error("Stopping EHCI Schedule Execution")]
+    StoppingEHCIScheduleExecution,
 }
 
 impl Error {
@@ -232,6 +242,8 @@ pub enum Fault {
     EhciControllerNotHalted,
     #[error("Invalid USB Address: {0:#x}")]
     InvalidUSBAddress(u8),
+    #[error("Invalid USB Max Packet length: {0}")]
+    InvalidUSBMaxPacketLength(u16),
     #[error("Invalid USB Total Bytes to Transfer: {0}")]
     InvalidUSBTotalBytesToTransfer(u16),
     #[error("Invalid USB Current Page: {0}")]
@@ -240,8 +252,6 @@ pub enum Fault {
     InvalidUSBCurrentBufferPagePointerOffset(u16),
     #[error("Unaligned EHCI Buffer Page Pointer: {0}")]
     UnalignedEHCIBufferPagePointer(u32),
-    #[error("Invalid EHCI buffer page offset: {offset} (max: {max})")]
-    InvalidEHCIBufferOffset { offset: usize, max: usize },
     #[error("Out of EHCI data structures to allocate")]
     OutOfEHCIDataStructures,
     #[error("Too many EHCI data structures to allocate")]
@@ -252,6 +262,14 @@ pub enum Fault {
     InvalidTransferDescriptorBundleReference(usize),
     #[error("Invalid buffer page bundle reference: {0}")]
     InvalidBufferPageBundleReference(usize),
+    #[error("Host Controller is not halted")]
+    HostControllerNotHalted,
+    #[error("EHCI queue transfer halted")]
+    EHCITransferHalted,
+    #[error("Unexpected descriptor type: 0x{0:02x}")]
+    UnexpectedDescriptorType(u8),
+    #[error("Invalid EHCI Extended Capabilities Pointer offset: {0:#x}")]
+    InvalidEECPOffset(u8),
     #[error("ArrayVec is full (capacity: {0})")]
     FullArrayVec(usize),
     #[error(
@@ -263,8 +281,8 @@ pub enum Fault {
     },
     #[error("Out of bounds bit set index: {index} (max size: {max_size})")]
     OutOfBoundsBitSetIndex { index: usize, max_size: usize },
-    #[error("Invalid USB Max Packet length: {0}")]
-    InvalidUSBMaxPacketLength(u16),
+    #[error("Invalid EHCI buffer page offset: {offset} (max: {max})")]
+    InvalidEHCIBufferOffset { offset: usize, max: usize },
 }
 
 #[derive(Debug, Error, Clone, Copy)]

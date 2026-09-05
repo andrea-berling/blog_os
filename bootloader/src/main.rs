@@ -7,8 +7,9 @@
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
 use common::{
+    array_vec::ArrayVec8,
     elf::program_header::ProgramHeaderEntryType,
-    usb::{self},
+    usb::{self, ehci::queue_head::EndpointSpeed},
 };
 use core::arch::{asm, naked_asm};
 
@@ -45,8 +46,7 @@ fn panic(info: &PanicInfo) -> ! {
 #[unsafe(link_section = ".text.start")]
 #[cfg(target_os = "none")]
 /// # Panics
-/// Panics under any of the following conditions:
-///   - can't write to the VGA display
+/// Panics if kernel intialization fails
 pub extern "cdecl" fn start(
     drive_parameters_pointer: *const u8,
     stage2_sectors: u32,
@@ -510,9 +510,9 @@ fn load_kernel_from_boot_disk(
                 error.with_fault(Fault::InvalidElf)
             })
         }
-        Err(_drive_parametrs) => {
+        Err(_) => {
             error::clear_global_error_chain_no_sync();
-            look_for_usb_root_hubs().map_err(|err| {
+            let (usb_controllers, usb_devices) = enumerate_usb_devices().map_err(|err| {
                 error::push_to_global_error_chain_no_sync(err);
                 error.with_fault(Fault::IOError)
             })?;
@@ -525,9 +525,22 @@ fn load_kernel_from_boot_disk(
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::missing_panics_doc)]
 // NOTE: Load-bearing assumption: the bootloader was loaded from a USB stick connected to a hub
-// controlle by an EHCI controller
-fn look_for_usb_root_hubs() -> error::Result<()> {
-    for mut usb_host_controller in pci::EHCIControllers::new() {
+// controlled by an EHCI controller
+fn enumerate_usb_devices() -> error::Result<(
+    ArrayVec8<usb::ehci::Controller>,
+    ArrayVec8<usb::ehci::Device>,
+)> {
+    let mut controllers: ArrayVec8<usb::ehci::Controller> = ArrayVec8::new();
+    let mut devices: ArrayVec8<usb::ehci::Device> = ArrayVec8::new();
+    for controller_result in pci::EHCIControllers::new() {
+        let mut usb_host_controller = match controller_result {
+            Ok(controller) => controller,
+            Err(error) => {
+                serial::log::debug_no_sync!("Warning: skipping EHCI controller: {error}");
+                continue;
+            }
+        };
+        let mut next_address = 1;
         if usb_host_controller
             .owner()
             .is_none_or(|owner| matches!(owner, usb::ehci::Owner::Bios))
@@ -537,23 +550,37 @@ fn look_for_usb_root_hubs() -> error::Result<()> {
         }
         usb_host_controller.reset()?;
         for (i, mut port) in usb_host_controller.ports().into_iter().enumerate() {
-            if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
-                && port.needs_reset()
-            {
+            if port.read_with(|port| {
+                port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
+                    && port.needs_reset()
+            }) {
                 serial::log::debug_no_sync!("Port {i} needs reset");
-                let _ = usb_host_controller.reset_port(port).inspect_err(|err| {
-                    serial::log::debug_no_sync!("Warning: Port reset failed: {err}");
-                });
+                let _ = usb_host_controller
+                    .reset_port(&mut port)
+                    .inspect_err(|err| {
+                        serial::log::debug_no_sync!("Warning: Port reset failed: {err}");
+                    });
             }
-            port = usb_host_controller.ports().get(i);
-            if port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent) {
-                serial::log::debug_no_sync!("Port {i} has device present");
+            if port.read_with(|port| {
+                port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent)
+                    && port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::Enabled)
+            }) {
+                serial::log::debug_no_sync!("Port {i} has device present and enabled");
                 serial::log::debug_no_sync!("Port number: {}", port.index());
-                serial::log::debug_no_sync!("Port Status and Control: {}", port.portsc());
+                serial::log::debug_no_sync!(
+                    "Port Status and Control:\n{}",
+                    port.portsc().clone_read()
+                );
+                let new_device = usb_host_controller
+                    .initialize_device(next_address.try_into()?, EndpointSpeed::HighSpeed)?;
+                serial::log::debug_no_sync!("New Device:\n{new_device}");
+                devices.try_push(new_device)?;
+                next_address += 1;
             }
         }
+        controllers.try_push(usb_host_controller)?;
     }
-    Ok(())
+    Ok((controllers, devices))
 }
 
 #[cfg(not(target_os = "none"))]

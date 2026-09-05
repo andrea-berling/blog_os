@@ -829,7 +829,7 @@ impl EHCIControllers {
         &mut self,
         config_header: &ConfigurationSpaceHeader,
         config_addr: ConfigAddressRegister,
-    ) -> Option<ehci::Controller> {
+    ) -> Option<error::Result<ehci::Controller>> {
         match config_header.get_class() {
             Class::EHCIUsb => Some(usb::ehci::Controller::new(
                 config_header.base_address_register_1() & !0xf,
@@ -846,7 +846,7 @@ impl EHCIControllers {
 }
 
 impl Iterator for EHCIControllers {
-    type Item = usb::ehci::Controller;
+    type Item = error::Result<ehci::Controller>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Brute-force enumeration
@@ -862,10 +862,10 @@ impl Iterator for EHCIControllers {
                         let controller_config_addr = self.config_addr.clone();
                         // Make sure that on next iteration, we go to the next device
                         self.config_addr.set_device_number(device_number + 1);
-                        if let Some(value) =
+                        if let Some(result) =
                             self.try_create_ehci_controller(config_header, controller_config_addr)
                         {
-                            return Some(value);
+                            return Some(result);
                         }
                     }
 
@@ -881,11 +881,11 @@ impl Iterator for EHCIControllers {
                                 let controller_config_addr = self.config_addr.clone();
                                 // Make sure that on next iteration, we go to the next function
                                 self.config_addr.set_device_number(function + 1);
-                                if let Some(value) = self.try_create_ehci_controller(
+                                if let Some(result) = self.try_create_ehci_controller(
                                     config_header,
                                     controller_config_addr,
                                 ) {
-                                    return Some(value);
+                                    return Some(result);
                                 }
                             }
                         }
