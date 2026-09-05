@@ -241,7 +241,7 @@ pub enum Fault {
     },
     #[error("Out of bounds bit set index: {index} (max size: {max_size})")]
     OutOfBoundsBitSetIndex { index: usize, max_size: usize },
-    #[error("Invalid Max Packet length: {0}")]
+    #[error("Invalid USB Max Packet length: {0}")]
     InvalidUSBMaxPacketLength(u16),
 }
 
