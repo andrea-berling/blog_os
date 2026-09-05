@@ -240,6 +240,16 @@ pub enum Fault {
     UnalignedEHCIBufferPagePointer(u32),
     #[error("Invalid EHCI buffer page offset: {offset} (max: {max})")]
     InvalidEHCIBufferOffset { offset: usize, max: usize },
+    #[error("Out of EHCI data structures to allocate")]
+    OutOfEHCIDataStructures,
+    #[error("Too many EHCI data structures to allocate")]
+    TooManyEHCIDataStructuresRequested,
+    #[error("Invalid queue head bundle reference: {0}")]
+    InvalidQueueHeadBundleReference(usize),
+    #[error("Invalid transfer descriptor bundle reference: {0}")]
+    InvalidTransferDescriptorBundleReference(usize),
+    #[error("Invalid buffer page bundle reference: {0}")]
+    InvalidBufferPageBundleReference(usize),
     #[error("ArrayVec is full (capacity: {0})")]
     FullArrayVec(usize),
     #[error(
