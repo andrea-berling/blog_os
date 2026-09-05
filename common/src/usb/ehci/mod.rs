@@ -10,8 +10,6 @@ use crate::{
     timer::{self, LowPrecisionTimer},
 };
 
-pub mod queue_head;
-pub mod transfer_descriptor;
 
 // Source of truth: EHCI specification 1.0
 
