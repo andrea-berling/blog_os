@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn selector() {
         let selector = Selector::with_index(5);
-        assert_eq!(5 << 3, u8::from(selector));
+        assert_eq!(5 << 3, u8::from(selector.clone()));
         assert!(!selector.is_set(tss::SelectorBit::UseLocalDescriptorTable))
     }
 }

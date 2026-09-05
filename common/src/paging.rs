@@ -258,8 +258,8 @@ mod tests {
         pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().expect("TODO"));
         pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
-        assert_eq!([0x83, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,], unsafe {
-            core::mem::transmute::<_, [u8; 8]>(pdpt.entries[0])
+        assert_eq!(&[0x83, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,], unsafe {
+            core::mem::transmute::<_, &[u8; 8]>(&pdpt.entries[0])
         });
 
         let mut pml4_entry = PML4Entry::new();
