@@ -8,9 +8,7 @@ use core::{
 use num_enum::TryFromPrimitive;
 
 use crate::{
-    bits,
-    error::{self, Fault},
-    make_bitmap,
+    bits, make_bitmap,
     mmio::VolatileValue,
     usb::{
         ehci::transfer_descriptor::{

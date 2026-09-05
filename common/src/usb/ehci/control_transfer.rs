@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 use zerocopy::TryFromBytes;
 
 use crate::{

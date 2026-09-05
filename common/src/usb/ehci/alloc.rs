@@ -1,4 +1,4 @@
-use core::{arch::asm, mem::transmute};
+use core::mem::transmute;
 
 use crate::{
     array_vec::ArrayVec,
