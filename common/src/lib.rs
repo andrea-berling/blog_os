@@ -3,6 +3,7 @@
 #![deny(clippy::missing_panics_doc)]
 #![deny(clippy::unwrap_used)]
 #![no_std]
+pub mod array_vec;
 pub mod ata;
 pub mod bits;
 pub mod control_registers;

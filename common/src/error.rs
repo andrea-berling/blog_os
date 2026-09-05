@@ -230,6 +230,8 @@ pub enum Fault {
     EhciControllerNotHalted,
     #[error("Invalid USB Address: {0:#x}")]
     InvalidUSBAddress(u8),
+    #[error("ArrayVec is full (capacity: {0})")]
+    FullArrayVec(usize),
     #[error("Invalid Max Packet length: {0}")]
     InvalidUSBMaxPacketLength(u16),
 }
