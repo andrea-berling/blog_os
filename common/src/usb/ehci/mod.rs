@@ -637,9 +637,6 @@ impl Controller {
             .map_err(|err| get_descriptor_error.with_fault(err.fault()))?
         {
             Descriptor::Device(descriptor) => descriptor,
-            // Unreachable while `Descriptor` only has the `Device` variant, but the
-            // arm will become reachable as more descriptor types get support
-            #[allow(unreachable_patterns)]
             unexpected => {
                 return Err(
                     get_descriptor_error.with_fault(Fault::UnexpectedDescriptorType(

@@ -1,5 +1,6 @@
 use core::fmt::Display;
 
+use num_enum::TryFromPrimitive;
 use zerocopy::{LE, TryFromBytes, U16};
 
 use crate::{
@@ -88,8 +89,68 @@ pub struct DeviceDescriptor {
     n_configurations: u8,
 }
 
+pub enum ConfigurationAttribute {
+    SelfPowered = 1 << 6,
+    RemoteWakeup = 1 << 5,
+}
+
+make_bitmap!(new_type: ConfigurationAttributes, underlying_flag_type: ConfigurationAttribute, repr: u8, nodisplay);
+
+#[derive(TryFromBytes)]
+#[repr(C)]
+pub struct ConfigurationDescriptor {
+    length: u8,
+    r#type: DescriptorType,
+    total_length: U16<LE>,
+    n_interfaces: u8,
+    configuration_value: u8,
+    string_index: u8,
+    attributes: ConfigurationAttributes,
+    max_power: u8,
+}
+
+#[derive(TryFromBytes)]
+#[repr(C)]
+pub struct InterfaceDescriptor {
+    length: u8,
+    r#type: DescriptorType,
+    interface_number: u8,
+    alternate_setting: u8,
+    n_endpoints: u8,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+    string_index: u8,
+}
+
+pub enum EndpointAddressBit {
+    In = 1 << 7,
+}
+
+make_bitmap!(new_type: EndpointAddress, underlying_flag_type: EndpointAddressBit, repr: u8, nodisplay);
+
+#[derive(TryFromBytes)]
+pub struct InterfaceAttributes {
+    bits: u8,
+}
+
+#[derive(TryFromBytes)]
+#[repr(C)]
+pub struct EndpointDescriptor {
+    length: u8,
+    r#type: DescriptorType,
+    address: EndpointAddress,
+    attributes: InterfaceAttributes,
+    max_packet_size: U16<LE>,
+    interval: u8,
+    polling_interval: u8,
+}
+
 pub enum Descriptor {
     Device(DeviceDescriptor),
+    Configuration(ConfigurationDescriptor),
+    Interface(InterfaceDescriptor),
+    Endpoint(EndpointDescriptor),
 }
 
 #[repr(C)]
@@ -99,6 +160,35 @@ pub struct SetupData {
     value: u16,
     index: u16,
     length: u16,
+}
+
+pub struct EndpointNumber(u8);
+
+#[derive(TryFromPrimitive)]
+#[repr(u8)]
+pub enum TransferType {
+    Control,
+    Isochronous,
+    Bulk,
+    Interrupt,
+}
+
+#[derive(TryFromPrimitive)]
+#[repr(u8)]
+pub enum SynchronizationType {
+    None,
+    Asynchronous,
+    Adaptive,
+    Synchronous,
+}
+
+#[derive(TryFromPrimitive)]
+#[repr(u8)]
+pub enum UsageType {
+    Data,
+    Feedback,
+    ImplicitFeedbackData,
+    Reserved,
 }
 
 pub struct LanguageId;
@@ -150,6 +240,9 @@ impl Descriptor {
     pub fn descriptor_type(&self) -> DescriptorType {
         match self {
             Descriptor::Device(_) => DescriptorType::Device,
+            Descriptor::Configuration(_) => DescriptorType::Configuration,
+            Descriptor::Interface(_) => DescriptorType::Interface,
+            Descriptor::Endpoint(_) => DescriptorType::Endpoint,
         }
     }
 }
@@ -306,5 +399,51 @@ impl Display for DeviceDescriptor {
 impl core::fmt::Display for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl EndpointAddress {
+    pub fn get_number(&self) -> EndpointNumber {
+        EndpointNumber(
+            bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 0, return_ty: u8),
+        )
+    }
+}
+
+impl InterfaceAttributes {
+    /// Returns the transfer type of this [`InterfaceAttributes`].
+    ///
+    /// # Panics
+    ///
+    /// Never
+    pub fn get_transfer_type(&self) -> TransferType {
+        TransferType::try_from(
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 0, return_ty: u8),
+        )
+        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
+    }
+
+    /// Returns synchronization type of this [`InterfaceAttributes`].
+    ///
+    /// # Panics
+    ///
+    /// Never
+    pub fn get_synchronization_type(&self) -> SynchronizationType {
+        SynchronizationType::try_from(
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 2, return_ty: u8),
+        )
+        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
+    }
+
+    /// Returns usage type of this [`InterfaceAttributes`].
+    ///
+    /// # Panics
+    ///
+    /// Never
+    pub fn get_usage_type(&self) -> UsageType {
+        UsageType::try_from(
+            bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 4, return_ty: u8),
+        )
+        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
     }
 }
