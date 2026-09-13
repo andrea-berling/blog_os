@@ -5,7 +5,7 @@ use zerocopy::TryFromBytes;
 
 use crate::{
     elf::header,
-    error::{self, Context, Error, Facility, Fault, convert_try_read_error},
+    error::{self, Context, Error, ErrorWithTrace, Facility, Fault, convert_try_read_error},
     make_bitmap,
 };
 
@@ -114,7 +114,7 @@ pub struct SectionHeaderEntries<'a> {
 pub struct StringTable<'a>(&'a [u8]);
 
 impl<'a> Section<'a> {
-    pub fn downcast_to_string_table(&self) -> error::Result<StringTable<'a>> {
+    pub fn downcast_to_string_table(&self) -> error::ResultWithTrace<StringTable<'a>> {
         match self {
             Section::StringTable(items) => Ok(StringTable(items)),
         }
@@ -122,11 +122,14 @@ impl<'a> Section<'a> {
 }
 
 impl HeaderEntry {
-    pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
-        let error: Error = Context::Parsing.into();
+    pub(crate) fn try_from_bytes(
+        bytes: &[u8],
+        class: header::Class,
+    ) -> error::ResultWithTrace<Self> {
+        let error: ErrorWithTrace = Context::Parsing.into();
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(convert_try_read_error)
+                .map_err(|err| convert_try_read_error(err).into())
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -139,7 +142,7 @@ impl HeaderEntry {
                 .map(inner::HeaderEntry::Elf32)
                 .map(HeaderEntry),
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(convert_try_read_error)
+                .map_err(|err| convert_try_read_error(err).into())
                 .and_then(|(header_entry, _rest)| {
                     let type_halfword = header_entry.r#type.get();
 
@@ -161,13 +164,25 @@ impl HeaderEntry {
         }
     }
 
-    /// # Panics
-    /// Panics if the type field doesn't contain a valid section type value
-    pub(crate) fn r#type(&self) -> SectionEntryType {
-        let error_msg = "type field did not contain a valid ELF object type";
+    /// # Errors
+    /// Returns `Fault::CorruptELFSectionHeaderEntry` if the stored section type is not a
+    /// valid [`SectionEntryType`], which can only happen if the entry was not validated on
+    /// creation or was modified afterwards
+    pub(crate) fn r#type(&self) -> error::ResultWithTrace<SectionEntryType> {
+        let error = Error::blank()
+            .with_context(Context::Parsing)
+            .with_facility(Facility::ElfSectionHeader);
         match &self.0 {
-            inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().expect(error_msg),
-            inner::HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().expect(error_msg),
+            inner::HeaderEntry::Elf32(entry) => entry.r#type.get().try_into().map_err(|_| {
+                error
+                    .with_fault(Fault::CorruptELFSectionHeaderEntry(entry.r#type.get()))
+                    .into()
+            }),
+            inner::HeaderEntry::Elf64(entry) => entry.r#type.get().try_into().map_err(|_| {
+                error
+                    .with_fault(Fault::CorruptELFSectionHeaderEntry(entry.r#type.get()))
+                    .into()
+            }),
         }
     }
 
@@ -220,11 +235,11 @@ impl HeaderEntry {
         }
     }
 
-    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> error::Result<Section<'b>>
+    pub fn try_to_entry<'a, 'b>(&'a self, bytes: &'b [u8]) -> error::ResultWithTrace<Section<'b>>
     where
         'b: 'a,
     {
-        match self.r#type() {
+        match self.r#type()? {
             SectionEntryType::Null => todo!(),
             SectionEntryType::Progbits => todo!(),
             SectionEntryType::Symtab => todo!(),
@@ -258,17 +273,20 @@ impl HeaderEntry {
             },
         }
     }
+}
 
-    /// Print out the header using the given writer
-    /// String formatting is considered infallible,
-    pub fn write_to<W: core::fmt::Write>(&self, writer: &mut W) -> core::fmt::Result {
-        writeln!(writer, "Name index: {}", self.name_index())?;
-        writeln!(writer, "Type: {}", self.r#type())?;
-        writeln!(writer, "Address: {:#x}", self.address())?;
-        writeln!(writer, "Offset: {:#x}", self.offset())?;
-        writeln!(writer, "Address Alignment: {:#x}", self.address_alignment())?;
-        writeln!(writer, "Size: {}", self.size())?;
-        writeln!(writer, "Flags: {}", self.flags())?;
+impl Display for HeaderEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Name index: {}", self.name_index())?;
+        match self.r#type() {
+            Ok(section_type) => writeln!(f, "Type: {section_type}")?,
+            Err(error) => writeln!(f, "Type: <{}>", error.fault())?,
+        }
+        writeln!(f, "Address: {:#x}", self.address())?;
+        writeln!(f, "Offset: {:#x}", self.offset())?;
+        writeln!(f, "Address Alignment: {:#x}", self.address_alignment())?;
+        writeln!(f, "Size: {}", self.size())?;
+        writeln!(f, "Flags: {}", self.flags())?;
         Ok(())
     }
 }
@@ -278,7 +296,7 @@ impl<'a> SectionHeaderEntries<'a> {
         bytes: &'a [u8],
         class: header::Class,
         n_entries: u16,
-    ) -> error::Result<Self> {
+    ) -> error::ResultWithTrace<Self> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
@@ -288,7 +306,8 @@ impl<'a> SectionHeaderEntries<'a> {
                 Fault::NotEnoughBytesFor("sections"),
                 Context::Parsing,
                 Facility::ElfSectionHeader,
-            ));
+            )
+            .into());
         }
 
         Ok(Self {
@@ -392,7 +411,7 @@ impl Display for FlagType {
 }
 
 impl<'a> Iterator for SectionHeaderEntries<'a> {
-    type Item = error::Result<HeaderEntry>;
+    type Item = error::ResultWithTrace<HeaderEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -534,9 +553,12 @@ mod tests {
     fn test_headers_64bit() {
         let mut header =
             HeaderEntry::try_from_bytes(&NULL_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(0, header.name_index());
-        assert_eq!(SectionEntryType::Null, header.r#type());
+        assert_eq!(
+            SectionEntryType::Null,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::empty(), header.flags());
         assert_eq!(0x0, header.address());
         assert_eq!(0x0, header.offset());
@@ -550,9 +572,12 @@ mod tests {
             &PROGBITS_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(1, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0x2e0, header.address());
         assert_eq!(0x2e0, header.offset());
@@ -564,9 +589,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&NOTE_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(9, header.name_index());
-        assert_eq!(SectionEntryType::Note, header.r#type());
+        assert_eq!(
+            SectionEntryType::Note,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0x2fc, header.address());
         assert_eq!(0x2fc, header.offset());
@@ -580,9 +608,12 @@ mod tests {
             &DYNSYM_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(42, header.name_index());
-        assert_eq!(SectionEntryType::DynSym, header.r#type());
+        assert_eq!(
+            SectionEntryType::DynSym,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0x340, header.address());
         assert_eq!(0x340, header.offset());
@@ -596,9 +627,12 @@ mod tests {
             &OS_SPECIFIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(50, header.name_index());
-        assert_eq!(SectionEntryType::OsSpecific(0x6fffffff), header.r#type());
+        assert_eq!(
+            SectionEntryType::OsSpecific(0x6fffffff),
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0x988, header.address());
         assert_eq!(0x988, header.offset());
@@ -612,9 +646,12 @@ mod tests {
             &STRING_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(88, header.name_index());
-        assert_eq!(SectionEntryType::Strtab, header.r#type());
+        assert_eq!(
+            SectionEntryType::Strtab,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0xb4c, header.address());
         assert_eq!(0xb4c, header.offset());
@@ -626,9 +663,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&RELA_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(96, header.name_index());
-        assert_eq!(SectionEntryType::Rela, header.r#type());
+        assert_eq!(
+            SectionEntryType::Rela,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::from(FlagType::Allocated), header.flags());
         assert_eq!(0xf48, header.address());
         assert_eq!(0xf48, header.offset());
@@ -642,9 +682,12 @@ mod tests {
             &RELA_PLT_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(106, header.name_index());
-        assert_eq!(SectionEntryType::Rela, header.r#type());
+        assert_eq!(
+            SectionEntryType::Rela,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(FlagType::Allocated | FlagType::InfoLink, header.flags());
         assert_eq!(0x7ae8, header.address());
         assert_eq!(0x7ae8, header.offset());
@@ -658,9 +701,12 @@ mod tests {
             &RODATA_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(135, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(
             FlagType::Allocated | FlagType::Merge | FlagType::Strings,
             header.flags()
@@ -675,9 +721,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&TEXT_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(185, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(
             FlagType::Allocated | FlagType::ExecutableInstructions,
             header.flags()
@@ -692,9 +741,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&GOT_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(267, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
         assert_eq!(0x86b50, header.address());
         assert_eq!(0x84b50, header.offset());
@@ -706,9 +758,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&BSS_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(318, header.name_index());
-        assert_eq!(SectionEntryType::NoBits, header.r#type());
+        assert_eq!(
+            SectionEntryType::NoBits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(FlagType::Writeable | FlagType::Allocated, header.flags());
         assert_eq!(0x88f08, header.address());
         assert_eq!(0x85f08, header.offset());
@@ -722,9 +777,12 @@ mod tests {
             &SYMBOL_TABLE_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(458, header.name_index());
-        assert_eq!(SectionEntryType::Symtab, header.r#type());
+        assert_eq!(
+            SectionEntryType::Symtab,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::empty(), header.flags());
         assert_eq!(0, header.address());
         assert_eq!(0x4e3dd0, header.offset());
@@ -775,9 +833,12 @@ mod tests {
     fn test_headers_32bit() {
         let mut header =
             HeaderEntry::try_from_bytes(&NULL_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(0, header.name_index());
-        assert_eq!(SectionEntryType::Null, header.r#type());
+        assert_eq!(
+            SectionEntryType::Null,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::empty(), header.flags());
         assert_eq!(0x0, header.address());
         assert_eq!(0x0, header.offset());
@@ -789,9 +850,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&TEXT_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(1, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(
             FlagType::Allocated | FlagType::ExecutableInstructions,
             header.flags()
@@ -808,9 +872,12 @@ mod tests {
             &RODATA_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(7, header.name_index());
-        assert_eq!(SectionEntryType::Progbits, header.r#type());
+        assert_eq!(
+            SectionEntryType::Progbits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(
             FlagType::Allocated | FlagType::Merge | FlagType::Strings,
             header.flags()
@@ -825,9 +892,12 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&BSS_HEADER_32_BIT[..], crate::elf::header::Class::Elf32)
-                .unwrap();
+                .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(15, header.name_index());
-        assert_eq!(SectionEntryType::NoBits, header.r#type());
+        assert_eq!(
+            SectionEntryType::NoBits,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(FlagType::Allocated | FlagType::Writeable, header.flags());
         assert_eq!(0x19730, header.address());
         assert_eq!(0xa730, header.offset());
@@ -841,9 +911,12 @@ mod tests {
             &SYMBOL_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(20, header.name_index());
-        assert_eq!(SectionEntryType::Symtab, header.r#type());
+        assert_eq!(
+            SectionEntryType::Symtab,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::empty(), header.flags());
         assert_eq!(0x0, header.address());
         assert_eq!(0xa730, header.offset());
@@ -857,9 +930,12 @@ mod tests {
             &STRING_TABLE_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(28, header.name_index());
-        assert_eq!(SectionEntryType::Strtab, header.r#type());
+        assert_eq!(
+            SectionEntryType::Strtab,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(Flags::empty(), header.flags());
         assert_eq!(0x0, header.address());
         assert_eq!(0xb2f0, header.offset());

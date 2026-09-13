@@ -4,7 +4,7 @@ pub mod header;
 pub mod program_header;
 pub mod section;
 
-use crate::error::{self, Context, Error, Facility, Fault};
+use crate::error::{self, Context, Error, ErrorWithTrace, Facility, Fault};
 
 pub struct File<'a> {
     bytes: &'a [u8],
@@ -15,7 +15,11 @@ impl<'a> File<'a> {
     /// # Panics
     /// Will panic if the size of the ELF file was not validated to contain enough bytes for the
     /// section header, and if that state wasn't preserved
-    pub fn sections(&self) -> section::SectionHeaderEntries<'a> {
+    /// # Errors
+    /// Returns an error if the file does not contain enough bytes for the section header
+    /// table. `File::try_from` validates this, so it can only happen on a corrupted or
+    /// hand-constructed `File`
+    pub fn sections(&self) -> error::ResultWithTrace<section::SectionHeaderEntries<'a>> {
         let n_entries = self.header.section_header_entries();
 
         section::SectionHeaderEntries::new(
@@ -24,13 +28,15 @@ impl<'a> File<'a> {
             self.header.class(),
             n_entries,
         )
-        .expect("not enough bytes for the section header")
     }
 
-    /// # Panics
-    /// Will panic if the size of the ELF file was not validated to contain enough bytes for the
-    /// program header, and if that state wasn't preserved
-    pub fn program_headers(&self) -> program_header::ProgramHeaderEntries<'a> {
+    /// # Errors
+    /// Returns an error if the file does not contain enough bytes for the program header
+    /// table. `File::try_from` validates this, so it can only happen on a corrupted or
+    /// hand-constructed `File`
+    pub fn program_headers(
+        &self,
+    ) -> error::ResultWithTrace<program_header::ProgramHeaderEntries<'a>> {
         let n_entries = self.header.program_header_entries();
 
         program_header::ProgramHeaderEntries::new(
@@ -39,13 +45,12 @@ impl<'a> File<'a> {
             self.header.class(),
             n_entries,
         )
-        .expect("not enough bytes for the program header")
     }
 
     pub fn get_section_by_index(
         &self,
         index: usize,
-    ) -> Option<error::Result<section::Section<'_>>> {
+    ) -> Option<error::ResultWithTrace<section::Section<'_>>> {
         if index >= self.header.section_header_entries() as usize {
             return None;
         }
@@ -85,9 +90,9 @@ impl<'a> File<'a> {
 }
 
 impl<'a> TryFrom<&'a [u8]> for File<'a> {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(bytes: &'a [u8]) -> error::Result<Self> {
+    fn try_from(bytes: &'a [u8]) -> error::ResultWithTrace<Self> {
         let error = Error::blank()
             .with_context(Context::Parsing)
             .with_facility(Facility::ElfFile);
@@ -103,7 +108,9 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.section_header_entry_size()
                         * result.header.section_header_entries()) as u64) as usize
         {
-            return Err(error.with_fault(Fault::NotEnoughBytesFor("section header")));
+            return Err(error
+                .with_fault(Fault::NotEnoughBytesFor("section header"))
+                .into());
         }
 
         if result.bytes.len() < result.header.program_header_offset() as usize
@@ -112,7 +119,9 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
                     + (result.header.program_header_entry_size()
                         * result.header.program_header_entries()) as u64) as usize
         {
-            return Err(error.with_fault(Fault::NotEnoughBytesFor("program header")));
+            return Err(error
+                .with_fault(Fault::NotEnoughBytesFor("program header"))
+                .into());
         }
 
         Ok(Self {
@@ -120,4 +129,10 @@ impl<'a> TryFrom<&'a [u8]> for File<'a> {
             header: bytes.try_into()?,
         })
     }
+}
+
+/// Test-only failure hook: fails the test with the full error trace
+#[cfg(test)]
+pub(crate) fn fail_with_trace<T>(error: error::ErrorWithTrace) -> T {
+    panic!("unexpected ELF error: {error}")
 }

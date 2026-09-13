@@ -5,7 +5,7 @@ use crate::{
 };
 
 use crate::elf::Error;
-use crate::error::convert_try_read_error;
+use crate::error::{ErrorWithTrace, convert_try_read_error};
 
 use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes as _;
@@ -86,11 +86,14 @@ pub struct ProgramHeaderEntries<'a> {
 }
 
 impl HeaderEntry {
-    pub(crate) fn try_from_bytes(bytes: &[u8], class: header::Class) -> error::Result<Self> {
-        let error: Error = Context::Parsing.into();
+    pub(crate) fn try_from_bytes(
+        bytes: &[u8],
+        class: header::Class,
+    ) -> error::ResultWithTrace<Self> {
+        let error: ErrorWithTrace = Context::Parsing.into();
         match class {
             header::Class::Elf32 => inner::Elf32HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(convert_try_read_error)
+                .map_err(|err| convert_try_read_error(err).into())
                 .and_then(|(header_entry, _rest)| {
                     let type_u16 = header_entry.r#type.get();
 
@@ -110,7 +113,7 @@ impl HeaderEntry {
                 .map(HeaderEntry),
 
             header::Class::Elf64 => inner::Elf64HeaderEntry::try_read_from_prefix(bytes)
-                .map_err(convert_try_read_error)
+                .map_err(|err| convert_try_read_error(err).into())
                 .and_then(|(header_entry, _rest)| {
                     let type_u16 = header_entry.r#type.get();
 
@@ -125,26 +128,35 @@ impl HeaderEntry {
         }
     }
 
-    pub fn r#type(&self) -> ProgramHeaderEntryType {
+    /// # Errors
+    /// Returns `Fault::CorruptELFProgramHeaderEntry` if the stored segment type is not a
+    /// valid [`ProgramHeaderEntryType`], which can only happen if the entry was not
+    /// validated on creation or was modified afterwards
+    pub fn r#type(&self) -> error::ResultWithTrace<ProgramHeaderEntryType> {
+        let error = Error::blank()
+            .with_context(Context::Parsing)
+            .with_facility(Facility::ElfProgramHeader);
         let r#type_word = match &self.0 {
             inner::HeaderEntry::Elf32(elf32_header_entry) => elf32_header_entry.r#type.get(),
             inner::HeaderEntry::Elf64(elf64_header_entry) => elf64_header_entry.r#type.get(),
         };
 
         match r#type_word {
-            0 => ProgramHeaderEntryType::Null,
-            1 => ProgramHeaderEntryType::Load,
-            2 => ProgramHeaderEntryType::Dynamic,
-            3 => ProgramHeaderEntryType::Interpreter,
-            4 => ProgramHeaderEntryType::Note,
-            5 => ProgramHeaderEntryType::SharedLibrary,
-            6 => ProgramHeaderEntryType::ProgramHeader,
-            7 => ProgramHeaderEntryType::ThreadLocalStorage,
-            t if (8..=0x5FFFFFFF).contains(&t) => ProgramHeaderEntryType::OsSpecific(t),
+            0 => Ok(ProgramHeaderEntryType::Null),
+            1 => Ok(ProgramHeaderEntryType::Load),
+            2 => Ok(ProgramHeaderEntryType::Dynamic),
+            3 => Ok(ProgramHeaderEntryType::Interpreter),
+            4 => Ok(ProgramHeaderEntryType::Note),
+            5 => Ok(ProgramHeaderEntryType::SharedLibrary),
+            6 => Ok(ProgramHeaderEntryType::ProgramHeader),
+            7 => Ok(ProgramHeaderEntryType::ThreadLocalStorage),
+            t if (8..=0x5FFFFFFF).contains(&t) => Ok(ProgramHeaderEntryType::OsSpecific(t)),
             t if (0x60000000..=0xFFFFFFFF).contains(&t) => {
-                ProgramHeaderEntryType::ProcessorSpecific(t)
+                Ok(ProgramHeaderEntryType::ProcessorSpecific(t))
             }
-            _ => unreachable!(),
+            _ => Err(error
+                .with_fault(Fault::CorruptELFProgramHeaderEntry(r#type_word))
+                .into()),
         }
     }
 
@@ -227,7 +239,7 @@ impl<'a> ProgramHeaderEntries<'a> {
         bytes: &'a [u8],
         class: header::Class,
         n_entries: u16,
-    ) -> error::Result<Self> {
+    ) -> error::ResultWithTrace<Self> {
         let entry_size = match class {
             header::Class::Elf32 => ELF32_ENTRY_SIZE,
             header::Class::Elf64 => ELF64_ENTRY_SIZE,
@@ -237,7 +249,8 @@ impl<'a> ProgramHeaderEntries<'a> {
                 Fault::NotEnoughBytesFor("program headers"),
                 Context::Parsing,
                 Facility::ElfProgramHeader,
-            ));
+            )
+            .into());
         }
 
         Ok(Self {
@@ -282,7 +295,10 @@ impl core::fmt::Display for PermissionFlag {
 
 impl core::fmt::Display for HeaderEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Type: {}", self.r#type())?;
+        match self.r#type() {
+            Ok(entry_type) => writeln!(f, "Type: {entry_type}")?,
+            Err(error) => writeln!(f, "Type: <{}>", error.fault())?,
+        }
         writeln!(f, "Offset: {:#x}", self.offset())?;
         writeln!(f, "Virtual Address: {:#x}", self.virtual_address())?;
         writeln!(f, "Physical Address: {:#x}", self.physical_address())?;
@@ -312,7 +328,7 @@ impl core::fmt::Display for ProgramHeaderEntryType {
 }
 
 impl<'a> Iterator for ProgramHeaderEntries<'a> {
-    type Item = error::Result<HeaderEntry>;
+    type Item = error::ResultWithTrace<HeaderEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes_read_so_far >= self.bytes.len() {
@@ -399,8 +415,11 @@ mod tests {
     fn test_headers_64bit() {
         let mut header =
             HeaderEntry::try_from_bytes(&PHDR_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
-        assert_eq!(ProgramHeaderEntryType::ProgramHeader, header.r#type());
+                .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::ProgramHeader,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x40, header.offset());
         assert_eq!(0x40, header.virtual_address());
         assert_eq!(0x40, header.physical_address());
@@ -416,8 +435,11 @@ mod tests {
             &INTERPRETER_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
-        assert_eq!(ProgramHeaderEntryType::Interpreter, header.r#type());
+        .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::Interpreter,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x2e0, header.offset());
         assert_eq!(0x2e0, header.virtual_address());
         assert_eq!(0x2e0, header.physical_address());
@@ -433,8 +455,11 @@ mod tests {
             &PT_LOAD_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
-        assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
+        .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::Load,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x21c00, header.offset());
         assert_eq!(0x22c00, header.virtual_address());
         assert_eq!(0x22c00, header.physical_address());
@@ -448,8 +473,11 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&TLS_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
-        assert_eq!(ProgramHeaderEntryType::ThreadLocalStorage, header.r#type());
+                .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::ThreadLocalStorage,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x80940, header.offset());
         assert_eq!(0x82940, header.virtual_address());
         assert_eq!(0x82940, header.physical_address());
@@ -465,8 +493,11 @@ mod tests {
             &DYNAMIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
-        assert_eq!(ProgramHeaderEntryType::Dynamic, header.r#type());
+        .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::Dynamic,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x84980, header.offset());
         assert_eq!(0x86980, header.virtual_address());
         assert_eq!(0x86980, header.physical_address());
@@ -482,10 +513,10 @@ mod tests {
             &PROCESSOR_SPECIFIC_HEADER_64_BIT[..],
             crate::elf::header::Class::Elf64,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(
             ProgramHeaderEntryType::ProcessorSpecific(0x6474e552),
-            header.r#type()
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
         );
         assert_eq!(0x80940, header.offset());
         assert_eq!(0x82940, header.virtual_address());
@@ -500,8 +531,11 @@ mod tests {
 
         header =
             HeaderEntry::try_from_bytes(&NOTE_HEADER_64_BIT[..], crate::elf::header::Class::Elf64)
-                .unwrap();
-        assert_eq!(ProgramHeaderEntryType::Note, header.r#type());
+                .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::Note,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x2fc, header.offset());
         assert_eq!(0x2fc, header.virtual_address());
         assert_eq!(0x2fc, header.physical_address());
@@ -532,8 +566,11 @@ mod tests {
             &PT_LOAD_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
         )
-        .unwrap();
-        assert_eq!(ProgramHeaderEntryType::Load, header.r#type());
+        .unwrap_or_else(crate::elf::fail_with_trace);
+        assert_eq!(
+            ProgramHeaderEntryType::Load,
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
+        );
         assert_eq!(0x1000, header.offset());
         assert_eq!(0x10000, header.virtual_address());
         assert_eq!(0x10000, header.physical_address());
@@ -549,10 +586,10 @@ mod tests {
             &PROCESSOR_SPECIFIC_HEADER_32_BIT[..],
             crate::elf::header::Class::Elf32,
         )
-        .unwrap();
+        .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(
             ProgramHeaderEntryType::ProcessorSpecific(0x6474e551),
-            header.r#type()
+            header.r#type().unwrap_or_else(crate::elf::fail_with_trace)
         );
         assert_eq!(0x0, header.offset());
         assert_eq!(0x0, header.virtual_address());

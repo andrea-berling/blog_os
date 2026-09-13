@@ -4,7 +4,7 @@ use num_enum::TryFromPrimitive;
 use zerocopy::TryFromBytes;
 
 use crate::elf::{program_header, section};
-use crate::error::{self, Context, Error, Facility, Fault, convert_try_read_error};
+use crate::error::{self, Context, Error, ErrorWithTrace, Facility, Fault, convert_try_read_error};
 
 mod inner {
     use zerocopy::{LE, TryFromBytes, U16, U32, U64};
@@ -296,17 +296,28 @@ impl Header {
         }
     }
 
-    /// # Panics
-    /// Panics if the Header instance had not been validated on creation or was modified in
-    /// uncontrolled ways afterwards
-    pub fn r#type(&self) -> ObjectType {
-        let error_msg = "type field did not contain a valid ELF object type";
+    /// # Errors
+    /// Returns `Fault::CorruptELFHeader` if the stored object type is not a valid
+    /// [`ObjectType`], which can only happen if the header was not validated on creation
+    /// or was modified afterwards
+    pub fn r#type(&self) -> error::ResultWithTrace<ObjectType> {
+        let error = Error::blank()
+            .with_context(Context::Parsing)
+            .with_facility(Facility::ElfHeader);
         match &self.0 {
             inner::Header::Elf32(elf32_header) => {
-                elf32_header.r#type.get().try_into().expect(error_msg)
+                elf32_header.r#type.get().try_into().map_err(|_| {
+                    error
+                        .with_fault(Fault::CorruptELFHeader(elf32_header.r#type.get()))
+                        .into()
+                })
             }
             inner::Header::Elf64(elf64_header) => {
-                elf64_header.r#type.get().try_into().expect(error_msg)
+                elf64_header.r#type.get().try_into().map_err(|_| {
+                    error
+                        .with_fault(Fault::CorruptELFHeader(elf64_header.r#type.get()))
+                        .into()
+                })
             }
         }
     }
@@ -339,9 +350,9 @@ impl TryFrom<u16> for ObjectType {
 }
 
 impl TryFrom<&[u8]> for Header {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(bytes: &[u8]) -> error::Result<Header> {
+    fn try_from(bytes: &[u8]) -> error::ResultWithTrace<Header> {
         let (elf_identifier, _rest) = ElfIdentifier::try_read_from_prefix(bytes)
             .map_err(convert_try_read_error)
             .map_err(|err| {
@@ -354,11 +365,13 @@ impl TryFrom<&[u8]> for Header {
             .with_facility(Facility::ElfHeader);
 
         if elf_identifier.magic != *b"\x7fELF" {
-            return Err(error.with_fault(Fault::InvalidValueForField("magic")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("magic"))
+                .into());
         }
 
         if elf_identifier.encoding != Encoding::LittleEndian {
-            return Err(error.with_fault(Fault::UnsupportedEndianness));
+            return Err(error.with_fault(Fault::UnsupportedEndianness).into());
         }
 
         let elf_header = Header(match elf_identifier.class {
@@ -385,15 +398,17 @@ impl TryFrom<&[u8]> for Header {
             .map_err(|_| error.with_fault(Fault::InvalidValueForField("type")))?;
 
         if elf_identifier.encoding != Encoding::LittleEndian {
-            return Err(error.with_fault(Fault::UnsupportedEndianness));
+            return Err(error.with_fault(Fault::UnsupportedEndianness).into());
         }
 
         if elf_header.version() != Version::Current {
-            return Err(error.with_fault(Fault::InvalidValueForField("version")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("version"))
+                .into());
         }
 
         if elf_header.size() != inner::HEADER_SIZE[elf_header.class() as usize] as u16 {
-            return Err(error.with_fault(Fault::InvalidValueForField("size")));
+            return Err(error.with_fault(Fault::InvalidValueForField("size")).into());
         }
 
         if elf_header.program_header_entry_size() as usize
@@ -402,7 +417,9 @@ impl TryFrom<&[u8]> for Header {
                 Class::Elf64 => program_header::ELF64_ENTRY_SIZE,
             })
         {
-            return Err(error.with_fault(Fault::InvalidValueForField("phentsize")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("phentsize"))
+                .into());
         }
 
         if elf_header.section_header_entry_size() as usize
@@ -411,7 +428,9 @@ impl TryFrom<&[u8]> for Header {
                 Class::Elf64 => section::ELF64_ENTRY_SIZE,
             })
         {
-            return Err(error.with_fault(Fault::InvalidValueForField("shentsize")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("shentsize"))
+                .into());
         }
 
         Ok(elf_header)
@@ -480,7 +499,10 @@ impl core::fmt::Display for Header {
         writeln!(f, "Class: {}", self.class())?;
         writeln!(f, "Data Encoding: {}", self.encoding())?;
         writeln!(f, "File Version: {}", self.version())?;
-        writeln!(f, "File type: {}", self.r#type())?;
+        match self.r#type() {
+            Ok(object_type) => writeln!(f, "File type: {object_type}")?,
+            Err(error) => writeln!(f, "File type: <{}>", error.fault())?,
+        }
         writeln!(f, "Entrypoint: {:#x}", self.entrypoint())?;
         writeln!(f, "Header size: {}", self.size())?;
 
@@ -540,7 +562,8 @@ mod tests {
 
     #[test]
     fn test_header() {
-        let header = Header::try_from(&_32_BIT_BOOTLOADER_HEADER[..]).unwrap();
+        let header = Header::try_from(&_32_BIT_BOOTLOADER_HEADER[..])
+            .unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(
             Header(inner::Header::Elf32(Elf32Header {
                 identifier: ElfIdentifier {
@@ -570,7 +593,8 @@ mod tests {
             header
         );
 
-        let header = Header::try_from(&_64_BIT_HEADER[..]).unwrap();
+        let header =
+            Header::try_from(&_64_BIT_HEADER[..]).unwrap_or_else(crate::elf::fail_with_trace);
         assert_eq!(
             Header(inner::Header::Elf64(Elf64Header {
                 identifier: ElfIdentifier {

@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
+use common::try_with_trace;
 use common::{
     array_vec::ArrayVec8,
     elf::program_header::ProgramHeaderEntryType,
@@ -77,23 +78,25 @@ pub extern "cdecl" fn start(
 
     vga::writeln_no_sync!("Hello from stage2!");
 
-    let initialization_parameters = init(
+    let initialization_parameters = match init(
         drive_parameters_pointer,
         stage2_sectors,
         kernel_sectors,
         stack_start,
-    )
-    .inspect_err(|err| {
-        error::push_to_global_error_chain_no_sync(*err);
-        error::push_to_global_error_chain_no_sync(Error::new(
-            Fault::KernelInitialization,
-            Context::PreparingForJumpToKernel,
-            Facility::Bootloader,
-        ));
-        vga::writeln_no_sync!("{:}", error::get_global_error_chain_no_sync());
-        serial::writeln_no_sync!("{:#}", error::get_global_error_chain_no_sync());
-    })
-    .expect("failed initializing the kernel");
+    ) {
+        Ok(initialization_parameters) => initialization_parameters,
+        Err(mut err) => {
+            err.replace_primary(Error::new(
+                Fault::KernelInitialization,
+                Context::PreparingForJumpToKernel,
+                Facility::Bootloader,
+            ));
+
+            vga::writeln_no_sync!("{err}");
+            serial::writeln_no_sync!("{err:#}");
+            panic!("failed initializing the kernel");
+        }
+    };
 
     // SAFETY: A valid page table was set up in setup_page_tables, and cr3 was loaded with its
     // address in setup_control_regsiters.
@@ -141,7 +144,7 @@ fn init(
     stage2_sectors: u32,
     kernel_sectors: u32,
     stack_start: u32,
-) -> error::Result<InitializationParameters> {
+) -> error::ResultWithTrace<InitializationParameters> {
     let kernel = load_kernel_from_boot_disk(
         drive_parameters_pointer,
         stage2_sectors,
@@ -156,7 +159,8 @@ fn init(
             Fault::KernelEntrypointAbove4G,
             Context::PreparingForJumpToKernel,
             Facility::Bootloader,
-        ));
+        )
+        .into());
     };
 
     // FIXME: what if the size of all statics in the kernel gets larger that 1MB? One should
@@ -167,7 +171,8 @@ fn init(
             Fault::KernelEntrypointTooHigh,
             Context::PreparingForJumpToKernel,
             Facility::Bootloader,
-        ));
+        )
+        .into());
     };
 
     load_segments_into_memory(&kernel)?;
@@ -190,7 +195,7 @@ fn init(
     })
 }
 
-fn setup_control_registers() -> error::Result<(
+fn setup_control_registers() -> error::ResultWithTrace<(
     ControlRegister0,
     ControlRegister3,
     ControlRegister4,
@@ -206,11 +211,12 @@ fn setup_control_registers() -> error::Result<(
 
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     #[allow(static_mut_refs)]
-    cr3.set_pml4(unsafe { &PML4 }).map_err(|error| {
-        error
-            .with_context(Context::SettingUpControlRegister("cr3"))
-            .with_facility(Facility::Bootloader)
-    })?;
+    let pml4 = unsafe { &PML4 };
+    error::try_with_trace!(
+        cr3.set_pml4(pml4),
+        context: Context::SettingUpControlRegister("cr3"),
+        facility: Facility::Bootloader
+    );
 
     Ok((cr0, cr3, cr4, efer))
 }
@@ -373,17 +379,16 @@ fn setup_debug_interrupt_descriptor_table() {
     }
 }
 
-fn setup_page_tables() -> error::Result<()> {
+fn setup_page_tables() -> error::ResultWithTrace<()> {
     let pdpt_ptr = &raw mut PAGE_DIRECTORY_POINTER_TABLE;
     // SAFETY: This is safe because we are in the bootloader and no other threads are running.
     let pdpt = unsafe { &mut *pdpt_ptr };
 
-    pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().map_err(
-        |err: Error| {
-            err.with_context(Context::SettingUpPageTable)
-                .with_facility(Facility::Bootloader)
-        },
-    )?);
+    pdpt.entries[0].set_physical_address(error::try_with_trace!(
+        core::ptr::null::<u8>().try_into(),
+        context: Context::SettingUpPageTable,
+        facility: Facility::Bootloader
+    ));
     pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
     let pml4_ptr = &raw mut PML4;
@@ -398,10 +403,10 @@ fn setup_page_tables() -> error::Result<()> {
 }
 
 #[cfg(target_os = "none")]
-fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
-    for loadable_program_header in kernel.program_headers().filter_map(|program_header| {
+fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::ResultWithTrace<()> {
+    for loadable_program_header in kernel.program_headers()?.filter_map(|program_header| {
         program_header.ok().filter(|program_header| {
-            matches!(program_header.r#type(), ProgramHeaderEntryType::Load)
+            matches!(program_header.r#type(), Ok(ProgramHeaderEntryType::Load))
         })
     }) {
         let loading_address = loadable_program_header.virtual_address();
@@ -415,7 +420,8 @@ fn load_segments_into_memory(kernel: &elf::File<'static>) -> error::Result<()> {
                 },
                 Context::LoadingSegment,
                 Facility::Bootloader,
-            ));
+            )
+            .into());
         }
 
         // SAFETY: Virtual address and size have been verified above to be at a address range
@@ -445,7 +451,7 @@ fn load_kernel_from_boot_disk(
     stage2_sectors: u32,
     kernel_sectors: u32,
     stack_start: u32,
-) -> error::Result<elf::File<'static>> {
+) -> error::ResultWithTrace<elf::File<'static>> {
     let error = Error::blank()
         .with_context(Context::ReadingKernelFromDisk)
         .with_facility(Facility::Bootloader);
@@ -462,11 +468,10 @@ fn load_kernel_from_boot_disk(
     };
 
     // SAFETY: For the reasons above, it's just as safe to unwrap here
-    let drive_parameters =
-        edd::DriveParameters::try_from(drive_parameters_bytes).map_err(|err| {
-            error::push_to_global_error_chain_no_sync(err);
-            error.with_fault(Fault::FailedBootDeviceIdentification)
-        })?;
+    let drive_parameters = try_with_trace!(
+        edd::DriveParameters::try_from(drive_parameters_bytes),
+        fail_with: error.with_fault(Fault::FailedBootDeviceIdentification)
+    );
 
     match ata::Device::try_from(drive_parameters) {
         Ok(ata_device) => {
@@ -487,27 +492,29 @@ fn load_kernel_from_boot_disk(
             // FIXME: if the kernel gets large enough, we might want to read it in multiple
             // operations, or use lba48
             if kernel_sectors > 256 {
-                return Err(error.with_fault(Fault::TooManySectors(kernel_sectors)));
+                return Err(error
+                    .with_fault(Fault::TooManySectors(kernel_sectors))
+                    .into());
             }
-            ata_device
-                .read_sectors_lba28_pio(kernel_sectors as u8, stage2_sectors + 1, kernel_bytes)
-                .map_err(|err| {
-                    error::push_to_global_error_chain_no_sync(err);
-                    error.with_fault(Fault::IOError)
-                })?;
+            try_with_trace!(
+                ata_device.read_sectors_lba28_pio(
+                    kernel_sectors as u8,
+                    stage2_sectors + 1,
+                    kernel_bytes
+                ),
+                fail_with: error.with_fault(Fault::IOError)
+            );
 
-            elf::File::try_from(&kernel_bytes[..kernel_size_bytes]).map_err(|err| {
-                error::push_to_global_error_chain_no_sync(err);
-                error.with_fault(Fault::InvalidElf)
-            })
+            Ok(try_with_trace!(
+                elf::File::try_from(&kernel_bytes[..kernel_size_bytes]),
+                fail_with: error.with_fault(Fault::InvalidElf)
+            ))
         }
         Err(_) => {
-            error::clear_global_error_chain_no_sync();
-            let (mut usb_controllers, mut usb_devices) =
-                enumerate_usb_devices().map_err(|err| {
-                    error::push_to_global_error_chain_no_sync(err);
-                    error.with_fault(Fault::IOError)
-                })?;
+            let (mut usb_controllers, mut usb_devices) = try_with_trace!(
+                enumerate_usb_devices(),
+                fail_with: error.with_fault(Fault::IOError)
+            );
 
             #[inline(always)]
             fn warn_and_skip(msg: &str) {
@@ -582,7 +589,7 @@ fn load_kernel_from_boot_disk(
 #[allow(clippy::missing_panics_doc)]
 // NOTE: Load-bearing assumption: the bootloader was loaded from a USB stick connected to a hub
 // controlled by an EHCI controller
-fn enumerate_usb_devices() -> error::Result<(
+fn enumerate_usb_devices() -> error::ResultWithTrace<(
     ArrayVec8<usb::ehci::Controller>,
     ArrayVec8<usb::ehci::Device>,
 )> {
@@ -659,17 +666,24 @@ fn main() {
     let string_table = elf_file
         .get_section_by_index(elf_file.header().string_table_index().into())
         .unwrap()
-        .unwrap()
+        .unwrap_or_else(|error| panic!("{error}"))
         .downcast_to_string_table()
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{error}"));
 
+    let sections = match elf_file.sections() {
+        Ok(sections) => sections,
+        Err(error) => {
+            println!("{error}");
+            return;
+        }
+    };
     println!("--------");
     println!("SECTIONS");
     println!("--------");
-    for section in elf_file.sections() {
+    for section in sections {
         use core::fmt::Write as _;
 
-        let section = section.unwrap();
+        let section = section.unwrap_or_else(|error| panic!("{error}"));
 
         let mut s = String::new();
         let section_name = string_table
@@ -678,17 +692,24 @@ fn main() {
             .unwrap();
         s.write_fmt(format_args!("Section name: {section_name}\n"))
             .unwrap();
-        section.write_to(&mut s).unwrap();
+        write!(&mut s, "{section}").unwrap();
         println!("--------");
         print!("{s}");
         println!("--------");
     }
 
+    let program_headers = match elf_file.program_headers() {
+        Ok(program_headers) => program_headers,
+        Err(error) => {
+            println!("{error}");
+            return;
+        }
+    };
     println!("--------");
     println!("SEGMENTS");
     println!("--------");
-    for header in elf_file.program_headers() {
-        let header = header.unwrap();
+    for header in program_headers {
+        let header = header.unwrap_or_else(|error| panic!("{error}"));
 
         let mut s = String::new();
         write!(&mut s, "{header}").unwrap();

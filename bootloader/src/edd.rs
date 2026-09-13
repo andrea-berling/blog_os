@@ -3,7 +3,7 @@
 // http://www.o3one.org/hwdocs/bios_doc/bios_specs_edd30.pdf
 use core::fmt::Display;
 
-use common::error::{self, Context, Error, Facility, Fault};
+use common::error::{self, Context, Error, ErrorWithTrace, Facility, Fault};
 use common::make_bitmap;
 
 use common::error::convert_try_read_error;
@@ -168,7 +168,7 @@ pub enum HWSpecificOptionFlagType {
 make_bitmap!(new_type: HWSpecificOptionFlags, underlying_flag_type: HWSpecificOptionFlagType, repr: u16, bit_skipper: |i| i > 10);
 
 impl DriveParameters {
-    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> error::Result<()> {
+    pub fn resolve_fdbt(&mut self, mut fdbt_address: u32) -> error::ResultWithTrace<()> {
         if fdbt_address == u32::MAX {
             // Nothing to do, the fdbt address is invalid
             return Ok(());
@@ -179,7 +179,8 @@ impl DriveParameters {
                 Fault::NotEnoughBytesFor("fixed disk parameter table"),
                 Context::Parsing,
                 Facility::EDDFixedDiskParameterTable,
-            ));
+            )
+            .into());
         }
         // Address is in seg:offset format, with offset coming first
         fdbt_address = ((fdbt_address >> 16) * 16) + (fdbt_address & 0xffff);
@@ -199,30 +200,34 @@ impl DriveParameters {
 }
 
 impl TryFrom<&[u8]> for DevicePathInformation {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(value: &[u8]) -> error::Result<Self> {
-        let (device_path_information_raw, _rest) =
-            DevicePathInformationRaw::try_read_from_prefix(value)
-                .map_err(convert_try_read_error)
-                .map_err(error::with!(Facility::EDDDevicePathInformation))?;
+    fn try_from(value: &[u8]) -> error::ResultWithTrace<Self> {
+        let (device_path_information_raw, _rest) = error::try_with_trace!(
+            DevicePathInformationRaw::try_read_from_prefix(value).map_err(convert_try_read_error),
+            facility: Facility::EDDDevicePathInformation
+        );
         let error = Error::blank()
             .with_context(Context::Parsing)
             .with_facility(Facility::EDDDevicePathInformation);
 
         if device_path_information_raw.bedd.get() != 0xbedd {
-            return Err(error.with_fault(Fault::InvalidValueForField("bedd")));
+            return Err(error.with_fault(Fault::InvalidValueForField("bedd")).into());
         }
 
         if device_path_information_raw.reserved_1 != 0
             || device_path_information_raw.reserved_2.get() != 0
             || device_path_information_raw.reserved_3 != 0
         {
-            return Err(error.with_fault(Fault::InvalidValueForField("reserved")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("reserved"))
+                .into());
         }
 
         if device_path_information_raw.length as usize != size_of::<DevicePathInformationRaw>() {
-            return Err(error.with_fault(Fault::InvalidValueForField("length")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("length"))
+                .into());
         }
 
         let checksum: u8 = value[..size_of::<DevicePathInformationRaw>() - 1]
@@ -230,7 +235,9 @@ impl TryFrom<&[u8]> for DevicePathInformation {
             .fold(0, |checksum, &byte| checksum.wrapping_add(byte));
 
         if checksum.wrapping_add(device_path_information_raw.checksum) != 0 {
-            return Err(error.with_fault(Fault::InvalidValueForField("checksum")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("checksum"))
+                .into());
         }
 
         Self::try_from(&device_path_information_raw)
@@ -238,9 +245,9 @@ impl TryFrom<&[u8]> for DevicePathInformation {
 }
 
 impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(value: &DevicePathInformationRaw) -> error::Result<Self> {
+    fn try_from(value: &DevicePathInformationRaw) -> error::ResultWithTrace<Self> {
         let interface_path = value.interface_path.get().to_le_bytes();
         let error = Error::blank()
             .with_context(Context::Parsing)
@@ -251,9 +258,11 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 let slot = interface_path[1];
                 let function = interface_path[2];
                 if !interface_path[3..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "PCI interface path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "PCI interface path reserved bytes",
+                        ))
+                        .into());
                 }
                 HostBus::Pci {
                     bus,
@@ -264,14 +273,18 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"ISA") => {
                 let base_address = value.interface_path.get() as u16;
                 if !interface_path[2..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "ISA interface path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "ISA interface path reserved bytes",
+                        ))
+                        .into());
                 }
                 HostBus::Isa { base_address }
             }
             _ => {
-                return Err(error.with_fault(Fault::InvalidValueForField("host bus type")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("host bus type"))
+                    .into());
             }
         };
 
@@ -280,9 +293,11 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"ATA") => {
                 let is_slave = device_path[0] == 1;
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "ATA device path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "ATA device path reserved bytes",
+                        ))
+                        .into());
                 }
                 Interface::Ata { is_slave }
             }
@@ -290,9 +305,11 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 let is_slave = device_path[0] == 1;
                 let logical_unit_number = device_path[1];
                 if !device_path[2..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "ATAPI device path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "ATAPI device path reserved bytes",
+                        ))
+                        .into());
                 }
                 Interface::Atapi {
                     is_slave,
@@ -302,9 +319,11 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"SCSI") => {
                 let logical_unit_number = device_path[0];
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "SCSI device path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "SCSI device path reserved bytes",
+                        ))
+                        .into());
                 }
                 Interface::Scsi {
                     logical_unit_number,
@@ -313,9 +332,11 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
             bytes if bytes.starts_with(b"USB") => {
                 let tbd = device_path[0];
                 if !device_path[1..].iter().all(|&b| b == 0) {
-                    return Err(error.with_fault(Fault::InvalidValueForField(
-                        "USB device path reserved bytes",
-                    )));
+                    return Err(error
+                        .with_fault(Fault::InvalidValueForField(
+                            "USB device path reserved bytes",
+                        ))
+                        .into());
                 }
                 Interface::Usb { tbd }
             }
@@ -326,7 +347,9 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
                 wwn: device_path[0],
             },
             _ => {
-                return Err(error.with_fault(Fault::InvalidValueForField("interface type")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("interface type"))
+                    .into());
             }
         };
         Ok(Self {
@@ -337,14 +360,16 @@ impl TryFrom<&DevicePathInformationRaw> for DevicePathInformation {
 }
 
 impl TryFrom<&DriveParametersRaw> for DriveParameters {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(value: &DriveParametersRaw) -> error::Result<Self> {
+    fn try_from(value: &DriveParametersRaw) -> error::ResultWithTrace<Self> {
         let error = Error::blank()
             .with_context(Context::Parsing)
             .with_facility(Facility::EDDDriveParameters);
         if value.buffer_size.get() != 26 && value.buffer_size.get() != 30 {
-            return Err(error.with_fault(Fault::InvalidValueForField("buffer size")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("buffer size"))
+                .into());
         }
 
         let information_flags: InfoFlags = InfoFlags {
@@ -352,33 +377,47 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
         };
         if information_flags.is_set(InfoFlagType::SuppliedGeometryValid) {
             if value.cylinders.get() == 0 {
-                return Err(error.with_fault(Fault::InvalidValueForField("cylinders")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("cylinders"))
+                    .into());
             }
             if value.heads.get() == 0 {
-                return Err(error.with_fault(Fault::InvalidValueForField("heads")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("heads"))
+                    .into());
             }
             if value.sectors_per_track.get() == 0 {
-                return Err(error.with_fault(Fault::InvalidValueForField("sectors_per_track")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("sectors_per_track"))
+                    .into());
             }
         }
 
         if value.bytes_per_sector.get() == 0 {
-            return Err(error.with_fault(Fault::InvalidValueForField("bytes_per_sector")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("bytes_per_sector"))
+                .into());
         }
 
         if information_flags.is_set(InfoFlagType::Removable) {
             if !information_flags.is_set(InfoFlagType::SupportsLineChange) {
-                return Err(error.with_fault(Fault::InvalidValueForField("information_flags")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("information_flags"))
+                    .into());
             }
             if !information_flags.is_set(InfoFlagType::Lockable) {
-                return Err(error.with_fault(Fault::InvalidValueForField("information_flags")));
+                return Err(error
+                    .with_fault(Fault::InvalidValueForField("information_flags"))
+                    .into());
             }
         }
 
         if information_flags.is_set(InfoFlagType::NoMediaPresent)
             && !information_flags.is_set(InfoFlagType::Removable)
         {
-            return Err(error.with_fault(Fault::InvalidValueForField("information_flags")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("information_flags"))
+                .into());
         }
 
         Ok(Self {
@@ -396,23 +435,25 @@ impl TryFrom<&DriveParametersRaw> for DriveParameters {
 }
 
 impl TryFrom<DriveParameters> for common::ata::Device {
-    type Error = error::Error;
+    type Error = error::ErrorWithTrace;
 
-    fn try_from(value: DriveParameters) -> error::Result<Self> {
+    fn try_from(value: DriveParameters) -> error::ResultWithTrace<Self> {
         //io_port_base_address: u16, control_port_base_address: u16, is_slave: bool, sectors: u64, sector_size_bytes: u16
         let error = Error::blank();
         let Some(fdpt) = &value.fixed_disk_parameter_table else {
-            return Err(error.with_fault(Fault::NoFDTBAvailable));
+            return Err(error.with_fault(Fault::NoFDTBAvailable).into());
         };
         let io_port_base_address = fdpt.io_port_base;
         let control_port_base_address = fdpt.control_port_base;
         let Some(device_path_information) = &value.device_path_information else {
-            return Err(error.with_fault(Fault::NoDevicePathInformationAvailable));
+            return Err(error
+                .with_fault(Fault::NoDevicePathInformationAvailable)
+                .into());
         };
         let is_slave = match device_path_information.interface {
             Interface::Ata { is_slave } | Interface::Atapi { is_slave, .. } => is_slave,
             _ => {
-                return Err(error.with_fault(Fault::NotAnATADevice));
+                return Err(error.with_fault(Fault::NotAnATADevice).into());
             }
         };
         let sectors = value.sectors;
@@ -428,12 +469,13 @@ impl TryFrom<DriveParameters> for common::ata::Device {
 }
 
 impl TryFrom<&[u8]> for DriveParameters {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(bytes: &[u8]) -> error::Result<Self> {
-        let (drive_parameters_raw, _rest) = DriveParametersRaw::try_read_from_prefix(bytes)
-            .map_err(convert_try_read_error)
-            .map_err(error::with!(Facility::EDDDriveParameters))?;
+    fn try_from(bytes: &[u8]) -> error::ResultWithTrace<Self> {
+        let (drive_parameters_raw, _rest) = error::try_with_trace!(
+            DriveParametersRaw::try_read_from_prefix(bytes).map_err(convert_try_read_error),
+            facility: Facility::EDDDriveParameters
+        );
 
         let mut result = Self::try_from(&drive_parameters_raw)?;
         if drive_parameters_raw.configuration_parameters.get() != u32::MAX
@@ -451,13 +493,14 @@ impl TryFrom<&[u8]> for DriveParameters {
 }
 
 impl TryFrom<&[u8]> for FixedDiskParameterTable {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(value: &[u8]) -> error::Result<Self> {
-        let (fixed_disk_parameter_table_raw, _rest) =
+    fn try_from(value: &[u8]) -> error::ResultWithTrace<Self> {
+        let (fixed_disk_parameter_table_raw, _rest) = error::try_with_trace!(
             FixedDiskParameterTableRaw::try_read_from_prefix(value)
-                .map_err(convert_try_read_error)
-                .map_err(error::with!(Facility::EDDFixedDiskParameterTable))?;
+                .map_err(convert_try_read_error),
+            facility: Facility::EDDFixedDiskParameterTable
+        );
 
         let checksum: u8 = value[..size_of::<FixedDiskParameterTableRaw>() - 1]
             .iter()
@@ -468,7 +511,8 @@ impl TryFrom<&[u8]> for FixedDiskParameterTable {
                 Fault::InvalidValueForField("checksum"),
                 Context::Parsing,
                 Facility::EDDFixedDiskParameterTable,
-            ));
+            )
+            .into());
         }
 
         Self::try_from(&fixed_disk_parameter_table_raw)
@@ -476,26 +520,32 @@ impl TryFrom<&[u8]> for FixedDiskParameterTable {
 }
 
 impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
-    type Error = Error;
+    type Error = ErrorWithTrace;
 
-    fn try_from(value: &FixedDiskParameterTableRaw) -> error::Result<Self> {
+    fn try_from(value: &FixedDiskParameterTableRaw) -> error::ResultWithTrace<Self> {
         let error = Error::blank()
             .with_context(Context::Parsing)
             .with_facility(Facility::EDDFixedDiskParameterTable);
         if value.extension_revision != 0x11 {
-            return Err(error.with_fault(Fault::InvalidValueForField("extension revision")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("extension revision"))
+                .into());
         }
 
         if value.head_prefix & 0b10001111 != 0b10000000 {
-            return Err(error.with_fault(Fault::InvalidValueForField("head_prefix")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("head_prefix"))
+                .into());
         }
 
         if value.irq & 0xf0 != 0 {
-            return Err(error.with_fault(Fault::InvalidValueForField("irq")));
+            return Err(error.with_fault(Fault::InvalidValueForField("irq")).into());
         }
 
         if value.pio_type & 0xf0 != 0 {
-            return Err(error.with_fault(Fault::InvalidValueForField("pio_type")));
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("pio_type"))
+                .into());
         }
 
         let hw_flags = HWSpecificOptionFlags {
@@ -505,18 +555,18 @@ impl TryFrom<&FixedDiskParameterTableRaw> for FixedDiskParameterTable {
         if hw_flags.is_set(HWSpecificOptionFlagType::Atapi)
             && !hw_flags.is_set(HWSpecificOptionFlagType::AtapiUsesInterruptDRQ)
         {
-            return Err(
-                error.with_fault(Fault::InvalidValueForField("hardware_specific_option_flag"))
-            );
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("hardware_specific_option_flag"))
+                .into());
         }
 
         if !hw_flags.is_set(HWSpecificOptionFlagType::CHSTranslation)
             && (hw_flags.is_set(HWSpecificOptionFlagType::TranslationTypeFirstBit)
                 || hw_flags.is_set(HWSpecificOptionFlagType::TranslationTypeSecondBit))
         {
-            return Err(
-                error.with_fault(Fault::InvalidValueForField("hardware_specific_option_flag"))
-            );
+            return Err(error
+                .with_fault(Fault::InvalidValueForField("hardware_specific_option_flag"))
+                .into());
         }
 
         Ok(Self {
@@ -716,7 +766,8 @@ mod tests {
     #[test]
     fn test_parse_drive_parameters() {
         let qemu_drive_parameters =
-            edd::DriveParameters::try_from(&QEMU_DRIVE_PARAMETERS_BYTES[..]).unwrap();
+            edd::DriveParameters::try_from(&QEMU_DRIVE_PARAMETERS_BYTES[..])
+                .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,
@@ -740,7 +791,8 @@ mod tests {
         );
 
         let bochs_drive_parameters =
-            edd::DriveParameters::try_from(&BOCHS_DRIVE_PARAMETERS_BYTES[..]).unwrap();
+            edd::DriveParameters::try_from(&BOCHS_DRIVE_PARAMETERS_BYTES[..])
+                .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             edd::DriveParameters {
                 buffer_size: 30,
@@ -764,7 +816,8 @@ mod tests {
 
     #[test]
     fn test_parse_fdpt() {
-        let qemu_fdpt = edd::FixedDiskParameterTable::try_from(&QEMU_FDPT_BYTES[..]).unwrap();
+        let qemu_fdpt = edd::FixedDiskParameterTable::try_from(&QEMU_FDPT_BYTES[..])
+            .unwrap_or_else(|error| panic!("{error}"));
         use edd::HWSpecificOptionFlagType::*;
         use edd::HeadRegisterFlagType::*;
         assert_eq!(
@@ -786,7 +839,8 @@ mod tests {
             qemu_fdpt
         );
 
-        let bochs_fdpt = edd::FixedDiskParameterTable::try_from(&BOCHS_FDPT_BYTES[..]).unwrap();
+        let bochs_fdpt = edd::FixedDiskParameterTable::try_from(&BOCHS_FDPT_BYTES[..])
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             FixedDiskParameterTable {
                 io_port_base: 0x1f0,
