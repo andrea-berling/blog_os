@@ -362,7 +362,7 @@ impl Descriptor {
             DescriptorType::DeviceQualifier => todo!(),
             DescriptorType::OtherSpeedConfiguration => todo!(),
             DescriptorType::InterfacePower => todo!(),
-            DescriptorType::Other(other) => todo!(),
+            DescriptorType::Other(..) => todo!(),
         }
     }
 }
@@ -707,13 +707,8 @@ impl InterfaceDescriptor {
             InterfaceClassType::StillImaging => todo!(),
             InterfaceClassType::Printer => todo!(),
             InterfaceClassType::MassStorage => {
-                let InterfaceSubclassType::MassStorage(subclass) = self.get_subclass_type()? else {
-                    return None;
-                };
-
-                let InterfaceProtocolType::MassStorage(protocol) = self.get_protocol_type()? else {
-                    return None;
-                };
+                let InterfaceSubclassType::MassStorage(subclass) = self.get_subclass_type()?;
+                let InterfaceProtocolType::MassStorage(protocol) = self.get_protocol_type()?;
 
                 Some(super::Class::MassStorage(subclass, protocol))
             }
