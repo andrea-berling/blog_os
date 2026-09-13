@@ -11,6 +11,7 @@ use crate::{
     timer::{self, LowPrecisionTimer},
     usb::{
         ehci::{
+            alloc::StaticBundle,
             control_transfer::{get_descriptor_bundle, set_address_bundle},
             queue_head::{EndpointSpeed, RawQueueHead},
         },
@@ -538,21 +539,8 @@ impl Controller {
             endpoint_speed,
             max_packet_length: None,
         })?;
-        self.set_async_addr_list(set_address_bundle.first_queue_head_raw());
-        self.enable_async_schedule()?;
-        self.run()?;
-
-        timer::bounded_wait!(set_address_bundle.first_qh_was_fetched() &&
-            !set_address_bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
-            , wait_for_ms: 2)
+        self.run_control_transfer(&set_address_bundle)
             .map_err(|err| set_address_error.with_fault(err.fault()))?;
-
-        if set_address_bundle
-            .get_status()
-            .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
-        {
-            return Err(set_address_error.with_fault(Fault::EHCITransferHalted));
-        }
 
         // The USB 2.0 spec requires at least 2 ms of recovery between a SET_ADDRESS
         // completing and the next request over the default pipe.
@@ -579,22 +567,8 @@ impl Controller {
                 lang_id: None,
             },
         )?;
-        self.set_async_addr_list(get_device_descriptor_bundle.first_queue_head_raw());
-        self.run()?;
-
-        timer::bounded_wait!(get_device_descriptor_bundle.first_qh_was_fetched() &&
-            !get_device_descriptor_bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
-            , wait_for_ms: 2)
+        self.run_control_transfer(&get_device_descriptor_bundle)
             .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
-
-        if get_device_descriptor_bundle
-            .get_status()
-            .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
-        {
-            return Err(get_descriptor_error.with_fault(Fault::EHCITransferHalted));
-        }
-
-        self.stop()?;
 
         let max_packet_size_endpoint_0 = get_device_descriptor_bundle.get_descriptor_buffer()
             [DeviceDescriptor::max_packet_size_endpoint_0_offset()]
@@ -615,22 +589,8 @@ impl Controller {
             },
         )?;
 
-        self.set_async_addr_list(get_device_descriptor_bundle.first_queue_head_raw());
-        self.run()?;
-
-        timer::bounded_wait!(get_device_descriptor_bundle.first_qh_was_fetched() &&
-            !get_device_descriptor_bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
-            , wait_for_ms: 2)
+        self.run_control_transfer(&get_device_descriptor_bundle)
             .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
-
-        if get_device_descriptor_bundle
-            .get_status()
-            .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
-        {
-            return Err(get_descriptor_error.with_fault(Fault::EHCITransferHalted));
-        }
-
-        self.stop()?;
 
         let descriptor = match get_device_descriptor_bundle
             .get_descriptor()
@@ -652,6 +612,32 @@ impl Controller {
             default_endpoint_speed: endpoint_speed,
             descriptor,
         })
+    }
+
+    pub fn run_control_transfer(&mut self, bundle: &StaticBundle) -> error::Result<()> {
+        self.enable_async_schedule()?;
+        self.set_async_addr_list(bundle.first_queue_head_raw());
+        self.run()?;
+
+        if let Err(err) = timer::bounded_wait!(bundle.first_qh_was_fetched() &&
+            !bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
+            , wait_for_ms: 2)
+        {
+            self.stop()?;
+            return Err(err);
+        }
+
+        if bundle
+            .get_status()
+            .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
+        {
+            self.stop()?;
+            return Err(Fault::EHCITransferHalted.into());
+        }
+
+        self.stop()?;
+
+        Ok(())
     }
 }
 
