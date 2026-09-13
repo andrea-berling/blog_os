@@ -6,7 +6,7 @@ use zerocopy::TryFromBytes;
 use crate::{
     array_vec::ArrayVec8,
     bits::{self},
-    error::{self, Context, Error, Facility, Fault, PciDevice, convert_try_read_error},
+    error::{self, Context, Error, Facility, Fault, PciDevice},
     make_bitmap,
     mmio::{self, Maskable},
     pci::ConfigAddressRegister,
@@ -202,7 +202,8 @@ impl Device {
         &self,
         index: u8,
         ehci_controller: &mut Controller,
-    ) -> error::Result<ArrayVec8<(InterfaceDescriptor, ArrayVec8<EndpointDescriptor>)>> {
+    ) -> error::ResultWithTrace<ArrayVec8<(InterfaceDescriptor, ArrayVec8<EndpointDescriptor>)>>
+    {
         let get_descriptor_error = Error::blank()
             .with_facility(Facility::EhciDevice(
                 self.controller_address(),
@@ -227,21 +228,24 @@ impl Device {
         let mut get_configuration_descriptor_bundle =
             get_descriptor_bundle(standard_parameters, get_descriptor_parameters)?;
 
-        ehci_controller
-            .run_control_transfer(&get_configuration_descriptor_bundle)
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            ehci_controller.run_control_transfer(&get_configuration_descriptor_bundle),
+            context: Context::GettingConfigurationDescriptor(index),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
 
-        let configuration_descriptor = match get_configuration_descriptor_bundle
-            .get_descriptor()
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?
-        {
+        let configuration_descriptor = match error::try_with_trace!(
+            get_configuration_descriptor_bundle.get_descriptor(),
+            context: Context::GettingConfigurationDescriptor(index),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        ) {
             Descriptor::Configuration(descriptor) => descriptor,
             unexpected => {
-                return Err(
-                    get_descriptor_error.with_fault(Fault::UnexpectedDescriptorType(
+                return Err(get_descriptor_error
+                    .with_fault(Fault::UnexpectedDescriptorType(
                         unexpected.descriptor_type().into(),
-                    )),
-                );
+                    ))
+                    .into());
             }
         };
 
@@ -255,9 +259,11 @@ impl Device {
             },
         )?;
 
-        ehci_controller
-            .run_control_transfer(&get_configuration_descriptor_bundle)
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            ehci_controller.run_control_transfer(&get_configuration_descriptor_bundle),
+            context: Context::GettingConfigurationDescriptor(index),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
 
         let bytes = &get_configuration_descriptor_bundle.get_descriptor_buffer()
             [size_of::<ConfigurationDescriptor>()..]
@@ -268,40 +274,36 @@ impl Device {
         while interface_descriptors.len() < configuration_descriptor.n_interfaces() as usize
             && let Some(descriptor) = descriptors_iterator.next_parsed()
         {
-            if let Descriptor::Interface(interface_descriptor) = descriptor.map_err(|err| {
-                err.with_facility(Facility::EhciDevice(
-                    self.controller_address(),
-                    self.address,
-                ))
-                .with_context(Context::ParsingInterfaceDescriptor)
-            })? {
+            if let Descriptor::Interface(interface_descriptor) = error::try_with_trace!(
+                descriptor,
+                context: Context::ParsingInterfaceDescriptor,
+                facility: Facility::EhciDevice(self.controller_address(), self.address)
+            ) {
                 let mut endpoint_descriptors = ArrayVec8::<EndpointDescriptor>::new();
                 while endpoint_descriptors.len() < interface_descriptor.n_endpoints() as usize
                     && let Some(subdescriptor) = descriptors_iterator.next_parsed()
                 {
-                    if let Descriptor::Endpoint(endpoint_descriptor) =
-                        subdescriptor.map_err(|err| {
-                            err.with_facility(Facility::EhciDevice(
-                                self.controller_address(),
-                                self.address,
-                            ))
-                            .with_context(Context::ParsingEndpointDescriptor)
-                        })?
-                    {
+                    if let Descriptor::Endpoint(endpoint_descriptor) = error::try_with_trace!(
+                        subdescriptor,
+                        context: Context::ParsingEndpointDescriptor,
+                        facility: Facility::EhciDevice(self.controller_address(), self.address)
+                    ) {
                         endpoint_descriptors.try_push(endpoint_descriptor)?;
                     }
                 }
                 if endpoint_descriptors.len() != interface_descriptor.n_endpoints() as usize {
-                    return Err(
-                        get_descriptor_error.with_fault(Fault::CorruptUSBEndpointDescriptor)
-                    );
+                    return Err(get_descriptor_error
+                        .with_fault(Fault::CorruptUSBEndpointDescriptor)
+                        .into());
                 }
                 interface_descriptors.try_push((interface_descriptor, endpoint_descriptors))?;
             }
         }
 
         if interface_descriptors.len() != configuration_descriptor.n_interfaces() as usize {
-            return Err(get_descriptor_error.with_fault(Fault::CorruptUSBInterfaceDescriptor));
+            return Err(get_descriptor_error
+                .with_fault(Fault::CorruptUSBInterfaceDescriptor)
+                .into());
         }
 
         Ok(interface_descriptors)
@@ -376,7 +378,10 @@ impl AsyncListAddr {
 impl Controller {
     const SET_ADDRESS_RECOVERY_DELAY_MS: u64 = 2;
 
-    pub fn new(base_address: u32, pci_config_addr: ConfigAddressRegister) -> error::Result<Self> {
+    pub fn new(
+        base_address: u32,
+        pci_config_addr: ConfigAddressRegister,
+    ) -> error::ResultWithTrace<Self> {
         // SAFETY: all the `VolatilePtr`s constructed below point into the EHCI register
         // space derived from `base_address`, the MMIO base taken from the PCI BAR: it is
         // mapped and uncached, and only accessed by this code (single thread). The
@@ -414,7 +419,8 @@ impl Controller {
             if eecp_pci_offset < 0x40 || !eecp_pci_offset.is_multiple_of(4) {
                 return Err(Error::blank()
                     .with_facility(Facility::EhciController(pci_config_addr.clone().into()))
-                    .with_fault(Fault::InvalidEECPOffset(eecp_pci_offset)));
+                    .with_fault(Fault::InvalidEECPOffset(eecp_pci_offset))
+                    .into());
             }
             Some(eecp_pci_offset)
         } else {
@@ -472,27 +478,26 @@ impl Controller {
         self.owner
     }
 
-    pub fn switch_ownership(&mut self, owner: Owner) -> error::Result<()> {
+    pub fn switch_ownership(&mut self, owner: Owner) -> error::ResultWithTrace<()> {
         let error: Error = Facility::EhciController(self.pci_config_addr.clone().into()).into();
         match owner {
             Owner::Bios => todo!(),
             Owner::Os => {
                 let Some(mut usb_legsup) = self.usb_legsup() else {
-                    return Err(error.with_fault(Fault::NoUSBLEGSUP));
+                    return Err(error.with_fault(Fault::NoUSBLEGSUP).into());
                 };
                 let Some(eecp_pci_offset) = self.eecp_pci_offset else {
-                    return Err(error.with_fault(Fault::NoEECP));
+                    return Err(error.with_fault(Fault::NoEECP).into());
                 };
                 usb_legsup.set_flag(USBLegacySupportExtendedCapabilityFlag::OsOwned);
                 usb_legsup.clear_flag(USBLegacySupportExtendedCapabilityFlag::BiosOwned);
                 self.pci_config_addr.set_register_offset(eecp_pci_offset);
                 self.pci_config_addr.write_dword(usb_legsup.into());
-                timer::bounded_wait!(matches!(self.read_owner_from_usblegsup(), Some(Owner::Os)), wait_for_ms: 100)
-                    .map_err(|err| {
-                        error
-                            .with_context(Context::WaitingHostControllerOwnershipSwitch)
-                            .with_fault(err.fault())
-                    })?;
+                error::try_with_trace!(
+                    timer::bounded_wait!(matches!(self.read_owner_from_usblegsup(), Some(Owner::Os)), wait_for_ms: 100),
+                    context: Context::WaitingHostControllerOwnershipSwitch,
+                    facility: Facility::EhciController(self.pci_config_addr.clone().into())
+                );
                 self.owner = Some(owner);
                 Ok(())
             }
@@ -519,50 +524,47 @@ impl Controller {
         &self.ports
     }
 
-    pub fn halt(&mut self) -> error::Result<()> {
-        let error = Error::blank()
-            .with_facility(Facility::EhciController(
-                self.pci_config_addr.clone().into(),
-            ))
-            .with_context(Context::HaltingEhciController);
+    pub fn halt(&mut self) -> error::ResultWithTrace<()> {
         let usb_status: USBStatusRegister = self.usb_status_register.clone_read();
         if !usb_status.is_set(USBStatusRegisterFlag::HostControllerHalted) {
             self.usb_command_register.update(|usb_command_register| {
                 usb_command_register.clear_flag(USBCommandRegisterFlag::Run);
             });
 
-            timer::bounded_wait!(self.usb_status_register.read_with(|x| x.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 100)
-                    .map_err(|err| {
-                        error
-                            .with_fault(err.fault())
-                    })?;
+            error::try_with_trace!(
+                timer::bounded_wait!(self.usb_status_register.read_with(|x| x.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 100),
+                context: Context::HaltingEhciController,
+                facility: Facility::EhciController(self.pci_config_addr.clone().into())
+            );
         }
         Ok(())
     }
 
-    pub fn reset(&mut self) -> error::Result<()> {
-        let error = Error::blank()
-            .with_facility(Facility::EhciController(
-                self.pci_config_addr.clone().into(),
-            ))
-            .with_context(Context::ResettingEhciController);
-        self.halt()?;
+    pub fn reset(&mut self) -> error::ResultWithTrace<()> {
+        error::try_with_trace!(
+            self.halt(),
+            context: Context::ResettingEhciController,
+            facility: Facility::EhciController(self.pci_config_addr.clone().into())
+        );
 
         let usb_command_register: USBCommandRegister =
             USBCommandRegisterFlag::HostControllerReset.into();
         self.usb_command_register.set(usb_command_register);
 
-        timer::bounded_wait!(!self.usb_command_register.read_with(|x| x.is_set(USBCommandRegisterFlag::HostControllerReset)), wait_for_ms: 100)
-        .map_err(|err| error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            timer::bounded_wait!(!self.usb_command_register.read_with(|x| x.is_set(USBCommandRegisterFlag::HostControllerReset)), wait_for_ms: 100),
+            context: Context::ResettingEhciController,
+            facility: Facility::EhciController(self.pci_config_addr.clone().into())
+        );
 
         Ok(())
     }
 
-    pub fn initialize() -> error::Result<()> {
+    pub fn initialize() -> error::ResultWithTrace<()> {
         Ok(())
     }
 
-    pub fn reset_port(&self, port: &mut Port) -> error::Result<()> {
+    pub fn reset_port(&self, port: &mut Port) -> error::ResultWithTrace<()> {
         // NOTE: PORTSC has RW1C change bits, so the write-backs below clear any change
         // bit that was set at read time; that is acceptable here (we are resetting the
         // port anyway, stale change indications are discarded on purpose)
@@ -578,10 +580,13 @@ impl Controller {
             port.clear_flag(PortStatusAndControlRegisterFlag::Reset);
         });
 
-        timer::bounded_wait!(port.read_with(|x| x.is_set(PortStatusAndControlRegisterFlag::Enabled)), wait_for_ms: 2).map_err(|err| {
-            err.with_context(Context::WaitingUSBPortResetClear(port.index() as u8))
-                .with_facility(Facility::EhciController(self.pci_config_addr.clone().into()))
-        })
+        error::try_with_trace!(
+            timer::bounded_wait!(port.read_with(|x| x.is_set(PortStatusAndControlRegisterFlag::Enabled)), wait_for_ms: 2),
+            context: Context::WaitingUSBPortResetClear(port.index() as u8),
+            facility: Facility::EhciController(self.pci_config_addr.clone().into())
+        );
+
+        Ok(())
     }
 
     pub fn set_async_addr_list(&mut self, address: *const RawQueueHead) {
@@ -589,7 +594,7 @@ impl Controller {
             .update(|async_list_addr| async_list_addr.set_address(address));
     }
 
-    pub fn enable_async_schedule(&mut self) -> error::Result<()> {
+    pub fn enable_async_schedule(&mut self) -> error::ResultWithTrace<()> {
         if self
             .usb_status_register
             .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::AsynchronousScheduleStatus))
@@ -601,7 +606,7 @@ impl Controller {
         Ok(())
     }
 
-    pub fn run(&mut self) -> error::Result<()> {
+    pub fn run(&mut self) -> error::ResultWithTrace<()> {
         let error: Error = Error::blank()
             .with_facility(Facility::EhciController(
                 self.pci_config_addr.clone().into(),
@@ -611,25 +616,21 @@ impl Controller {
             .usb_status_register
             .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted))
         {
-            return Err(error.with_fault(Fault::HostControllerNotHalted));
+            return Err(error.with_fault(Fault::HostControllerNotHalted).into());
         }
         self.usb_command_register
             .update(|usbcmd| usbcmd.set_flag(USBCommandRegisterFlag::Run));
-        timer::bounded_wait!(!self
-            .usb_status_register
-            .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 4)
-            .map_err(|err| {
-                error.with_fault(err.fault())
-            })?;
+        error::try_with_trace!(
+            timer::bounded_wait!(!self
+                .usb_status_register
+                .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 4),
+            context: Context::StartingEHCIScheduleExecution,
+            facility: Facility::EhciController(self.pci_config_addr.clone().into())
+        );
         Ok(())
     }
 
-    pub fn stop(&mut self) -> error::Result<()> {
-        let error: Error = Error::blank()
-            .with_facility(Facility::EhciController(
-                self.pci_config_addr.clone().into(),
-            ))
-            .with_context(Context::StoppingEHCIScheduleExecution);
+    pub fn stop(&mut self) -> error::ResultWithTrace<()> {
         if self
             .usb_status_register
             .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted))
@@ -638,12 +639,13 @@ impl Controller {
         }
         self.usb_command_register
             .update(|usbcmd| usbcmd.clear_flag(USBCommandRegisterFlag::Run));
-        timer::bounded_wait!(self
-            .usb_status_register
-            .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 4)
-            .map_err(|err| {
-                error.with_fault(err.fault())
-            })?;
+        error::try_with_trace!(
+            timer::bounded_wait!(self
+                .usb_status_register
+                .read_with(|usbsts| usbsts.is_set(USBStatusRegisterFlag::HostControllerHalted)), wait_for_ms: 4),
+            context: Context::StoppingEHCIScheduleExecution,
+            facility: Facility::EhciController(self.pci_config_addr.clone().into())
+        );
         Ok(())
     }
 
@@ -651,11 +653,8 @@ impl Controller {
         &mut self,
         new_address: Address,
         endpoint_speed: EndpointSpeed,
-    ) -> error::Result<Device> {
+    ) -> error::ResultWithTrace<Device> {
         let facility = Facility::EhciController(self.pci_config_addr.clone().into());
-        let set_address_error = Error::blank()
-            .with_facility(facility)
-            .with_context(Context::SettingEHCIDeviceAddress);
         let get_descriptor_error = Error::blank()
             .with_facility(facility)
             .with_context(Context::GettingDeviceDescriptor);
@@ -665,8 +664,11 @@ impl Controller {
             max_packet_length: None,
         })?;
 
-        self.run_control_transfer(&set_address_bundle)
-            .map_err(|err| set_address_error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            self.run_control_transfer(&set_address_bundle),
+            context: Context::SettingEHCIDeviceAddress,
+            facility: facility
+        );
 
         // The USB 2.0 spec requires at least 2 ms of recovery between a SET_ADDRESS
         // completing and the next request over the default pipe.
@@ -692,8 +694,11 @@ impl Controller {
                 lang_id: None,
             },
         )?;
-        self.run_control_transfer(&get_device_descriptor_bundle)
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            self.run_control_transfer(&get_device_descriptor_bundle),
+            context: Context::GettingDeviceDescriptor,
+            facility: facility
+        );
 
         let max_packet_size_endpoint_0 = get_device_descriptor_bundle.get_descriptor_buffer()
             [DeviceDescriptor::max_packet_size_endpoint_0_offset()]
@@ -714,20 +719,24 @@ impl Controller {
             },
         )?;
 
-        self.run_control_transfer(&get_device_descriptor_bundle)
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+        error::try_with_trace!(
+            self.run_control_transfer(&get_device_descriptor_bundle),
+            context: Context::GettingDeviceDescriptor,
+            facility: facility
+        );
 
-        let descriptor = match get_device_descriptor_bundle
-            .get_descriptor()
-            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?
-        {
+        let descriptor = match error::try_with_trace!(
+            get_device_descriptor_bundle.get_descriptor(),
+            context: Context::GettingDeviceDescriptor,
+            facility: facility
+        ) {
             Descriptor::Device(descriptor) => descriptor,
             unexpected => {
-                return Err(
-                    get_descriptor_error.with_fault(Fault::UnexpectedDescriptorType(
+                return Err(get_descriptor_error
+                    .with_fault(Fault::UnexpectedDescriptorType(
                         unexpected.descriptor_type().into(),
-                    )),
-                );
+                    ))
+                    .into());
             }
         };
 
@@ -744,7 +753,7 @@ impl Controller {
         &self.pci_config_addr
     }
 
-    pub fn run_control_transfer(&mut self, bundle: &StaticBundle) -> error::Result<()> {
+    pub fn run_control_transfer(&mut self, bundle: &StaticBundle) -> error::ResultWithTrace<()> {
         self.enable_async_schedule()?;
         self.set_async_addr_list(bundle.first_queue_head_raw());
         self.run()?;
@@ -754,7 +763,7 @@ impl Controller {
             , wait_for_ms: 2)
         {
             let _ = self.stop();
-            return Err(err);
+            return Err(err.into());
         }
 
         if bundle

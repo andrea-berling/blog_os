@@ -254,7 +254,11 @@ mod tests {
     #[test]
     fn first_gb_identity_mapped() {
         let mut pdpt = paging::PageDirectoryPointerTable::new();
-        pdpt.entries[0].set_physical_address(core::ptr::null::<u8>().try_into().expect("TODO"));
+        pdpt.entries[0].set_physical_address(
+            core::ptr::null::<u8>()
+                .try_into()
+                .unwrap_or_else(|error| panic!("{error}")),
+        );
         pdpt.entries[0].set_flag(paging::PageTableEntryFlag::Write);
 
         // SAFETY: the entry types are plain-old-data; transmuting to bytes only to

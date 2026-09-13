@@ -5,7 +5,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use crate::{
     bits,
     error::{
-        self, Error,
+        self,
         Fault::{self, InvalidPCIMemoryAddressingType},
         PciDevice, convert_try_read_error,
     },
@@ -359,7 +359,7 @@ impl ConfigAddressRegister {
 
     pub fn dump_configuration_space_header(
         &mut self,
-    ) -> Option<error::Result<ConfigurationSpaceHeader>> {
+    ) -> Option<error::ResultWithTrace<ConfigurationSpaceHeader>> {
         let mut bytes = [0u8; size_of::<ConfigurationSpaceHeader>()];
         let mut offset = 0usize;
         self.set_register_offset(offset as u8);
@@ -533,7 +533,7 @@ impl EHCIControllers {
         &mut self,
         config_header: &ConfigurationSpaceHeader,
         config_addr: ConfigAddressRegister,
-    ) -> Option<error::Result<ehci::Controller>> {
+    ) -> Option<error::ResultWithTrace<ehci::Controller>> {
         match config_header.get_class() {
             Class::EHCIUsb => Some(usb::ehci::Controller::new(
                 config_header.base_address_register_1() & !0xf,
@@ -560,9 +560,9 @@ impl From<ConfigAddressRegister> for PciDevice {
 }
 
 impl TryFrom<&[u8]> for ConfigurationSpaceHeader {
-    type Error = Error;
+    type Error = error::ErrorWithTrace;
 
-    fn try_from(bytes: &[u8]) -> error::Result<Self> {
+    fn try_from(bytes: &[u8]) -> error::ResultWithTrace<Self> {
         let configuration_space_header_raw = ConfigurationSpaceHeader::try_read_from_prefix(bytes)
             .map(|(result, _rest)| result)
             .map_err(convert_try_read_error)?;
@@ -846,7 +846,7 @@ impl core::fmt::Display for DeviceStatusFlag {
 }
 
 impl Iterator for EHCIControllers {
-    type Item = error::Result<ehci::Controller>;
+    type Item = error::ResultWithTrace<ehci::Controller>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Brute-force enumeration

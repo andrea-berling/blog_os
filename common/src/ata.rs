@@ -192,19 +192,27 @@ impl Device {
         status.is_set(ReadyForSendReceive) && !status.is_set(BusyPreparingToSendReceive)
     }
 
-    fn wait_for_readiness(&self, timeout_ms: u64) -> error::Result<()> {
+    fn wait_for_readiness(&self, timeout_ms: u64) -> error::ResultWithTrace<()> {
         Self::courtesy_delay();
-        timer::bounded_wait!(self.ready_for_command(), wait_for_ms: timeout_ms)
-            .map_err(error::with!(Context::Io))
-            .map_err(error::with!(Facility::AtaDevice(self.io_port_base_address)))
+        error::try_with_trace!(
+            timer::bounded_wait!(self.ready_for_command(), wait_for_ms: timeout_ms),
+            context: Context::Io,
+            facility: Facility::AtaDevice(self.io_port_base_address)
+        );
+
+        Ok(())
     }
 
-    fn poll_for_reads(&self, timeout_ms: u64) -> error::Result<()> {
+    fn poll_for_reads(&self, timeout_ms: u64) -> error::ResultWithTrace<()> {
         Self::courtesy_delay();
 
-        timer::bounded_wait!(self.has_data_to_send(), wait_for_ms: timeout_ms)
-            .map_err(error::with!(Context::Io))
-            .map_err(error::with!(Facility::AtaDevice(self.io_port_base_address)))
+        error::try_with_trace!(
+            timer::bounded_wait!(self.has_data_to_send(), wait_for_ms: timeout_ms),
+            context: Context::Io,
+            facility: Facility::AtaDevice(self.io_port_base_address)
+        );
+
+        Ok(())
     }
 
     pub fn read_sectors_lba28_pio(
@@ -212,16 +220,20 @@ impl Device {
         sector_count: u8,
         lba_address: u32,
         output_buffer: &mut [u8],
-    ) -> error::Result<()> {
+    ) -> error::ResultWithTrace<()> {
         if lba_address as u64 >= self.sectors {
-            return Err(self.io_error(Fault::InvalidLBAAddress(lba_address.into(), self.sectors)));
+            return Err(self
+                .io_error(Fault::InvalidLBAAddress(lba_address.into(), self.sectors))
+                .into());
         }
 
         if (output_buffer.len() as u64) < (sector_count as u64 * self.sector_size_bytes as u64) {
-            return Err(self.io_error(Fault::CantReadIntoBuffer(
-                output_buffer.len() as u64,
-                sector_count as u64 * self.sector_size_bytes as u64,
-            )));
+            return Err(self
+                .io_error(Fault::CantReadIntoBuffer(
+                    output_buffer.len() as u64,
+                    sector_count as u64 * self.sector_size_bytes as u64,
+                ))
+                .into());
         }
 
         use DriveHeadRegisterFlag::*;

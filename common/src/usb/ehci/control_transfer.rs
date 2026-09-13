@@ -43,20 +43,24 @@ pub struct GetDescriptorParameters {
 }
 
 impl GetDescriptorStaticBundle {
-    pub fn get_descriptor(&self) -> error::Result<Descriptor> {
+    pub fn get_descriptor(&self) -> error::ResultWithTrace<Descriptor> {
         match self.descriptor_type {
             DescriptorType::Device => {
                 DeviceDescriptor::try_read_from_bytes(self.get_descriptor_buffer())
                     .map(Descriptor::Device)
                     .map_err(|err| {
-                        convert_try_read_error(err).with_context(Context::ReadingDescriptor)
+                        convert_try_read_error(err)
+                            .with_context(Context::ReadingDescriptor)
+                            .into()
                     })
             }
             DescriptorType::Configuration => {
                 ConfigurationDescriptor::try_read_from_bytes(self.get_descriptor_buffer())
                     .map(Descriptor::Configuration)
                     .map_err(|err| {
-                        convert_try_read_error(err).with_context(Context::ReadingDescriptor)
+                        convert_try_read_error(err)
+                            .with_context(Context::ReadingDescriptor)
+                            .into()
                     })
             }
             DescriptorType::String => todo!(),
@@ -89,7 +93,7 @@ impl GetDescriptorStaticBundle {
             descriptor_index,
             lang_id,
         }: GetDescriptorParameters,
-    ) -> error::Result<()> {
+    ) -> error::ResultWithTrace<()> {
         use crate::usb::ehci::transfer_descriptor::PacketId::*;
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::Active;
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::InterruptOnComplete;
@@ -149,7 +153,7 @@ pub fn set_address_bundle(
         endpoint_speed,
         ..
     }: StandardParameters,
-) -> error::Result<StaticBundle> {
+) -> error::ResultWithTrace<StaticBundle> {
     let mut bundle = allocate_static_bundle(AllocationRequest {
         n_queue_heads: 1,
         n_queue_transfer_descriptors: 2,
@@ -174,7 +178,7 @@ pub fn set_address_bundle(
 pub fn get_descriptor_bundle(
     standard_parameters: StandardParameters,
     get_descriptor_parameters: GetDescriptorParameters,
-) -> error::Result<GetDescriptorStaticBundle> {
+) -> error::ResultWithTrace<GetDescriptorStaticBundle> {
     let bundle = allocate_static_bundle(AllocationRequest {
         n_queue_heads: 1,
         n_queue_transfer_descriptors: 3,

@@ -79,7 +79,7 @@ impl StaticBundle {
         &mut self,
         from: QueueHeadIndex,
         to: Option<QueueHeadIndex>,
-    ) -> error::Result<()> {
+    ) -> error::ResultWithTrace<()> {
         let Some(qh) = self.queue_heads_mut().get_mut(usize::from(from)) else {
             return Err(Fault::InvalidQueueHeadBundleReference(usize::from(from)).into());
         };
@@ -102,7 +102,7 @@ impl StaticBundle {
         from: QtdLinkSource,
         link: QtdLink,
         to: Option<QueueTransferDescriptorIndex>,
-    ) -> error::Result<()> {
+    ) -> error::ResultWithTrace<()> {
         match from {
             QtdLinkSource::QueueHead(qh_index) => {
                 let Some(qh) = self.queue_heads_mut().get_mut(usize::from(qh_index)) else {
@@ -144,7 +144,7 @@ impl StaticBundle {
     ///
     /// # Errors
     /// Fails if any logical link refers to a structure outside the bundle
-    pub fn link_things_up(&mut self) -> error::Result<()> {
+    pub fn link_things_up(&mut self) -> error::ResultWithTrace<()> {
         let qh_ptrs = {
             let mut v: ArrayVec<_, MAX_QUEUE_HEADS> = ArrayVec::new();
             for slot in &self.queue_heads {
@@ -237,7 +237,7 @@ impl StaticBundle {
         pointer: &mut VolatileValue<QueueTransferDescriptorPointer>,
         to: Option<QueueTransferDescriptorIndex>,
         qtds_ptrs: &[*const QueueTransferDescriptor],
-    ) -> error::Result<()> {
+    ) -> error::ResultWithTrace<()> {
         match to {
             Some(idx) if usize::from(idx) < qtds_ptrs.len() => {
                 let mut next_pointer =
@@ -261,7 +261,7 @@ impl StaticBundle {
         address: Address,
         endpoint_speed: queue_head::EndpointSpeed,
         max_packet_length: Option<MaxPacketLength>,
-    ) -> Result<(), error::Error> {
+    ) -> Result<(), error::ErrorWithTrace> {
         use crate::usb::ehci::queue_head::EndpointCharacteristicsBit::HeadOfReclamationListFlag;
         use crate::usb::ehci::queue_head::HighBandwidthPipeMultiplier::OneTransactionPerMicroFrame;
         let qh = &mut self.queue_heads_mut()[0];
@@ -299,7 +299,7 @@ impl StaticBundle {
     pub fn initialize_setup_queue_transfer_descriptor(
         &mut self,
         setup_data: SetupData,
-    ) -> Result<(), error::Error> {
+    ) -> Result<(), error::ErrorWithTrace> {
         use crate::usb::ehci::transfer_descriptor::PacketId::*;
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::Active;
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::InterruptOnComplete;
@@ -333,7 +333,7 @@ impl StaticBundle {
     pub fn handshake_last_queue_transfer_descriptor(
         &mut self,
         packet_id: PacketId,
-    ) -> Result<(), error::Error> {
+    ) -> Result<(), error::ErrorWithTrace> {
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::Active;
         use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::InterruptOnComplete;
         let Some(last_td) = self.queue_transfer_descriptors_mut().last_mut() else {
@@ -403,7 +403,7 @@ impl StaticBundle {
 }
 
 impl StaticBundleAllocator {
-    pub fn allocate(&mut self, request: AllocationRequest) -> error::Result<StaticBundle> {
+    pub fn allocate(&mut self, request: AllocationRequest) -> error::ResultWithTrace<StaticBundle> {
         let mut queue_heads: StaticQueueHeadsVec = ArrayVec::new();
         let mut queue_transfer_descriptors: StaticQueueTDsVec = ArrayVec::new();
         let mut buffers: StaticBuffersVec = ArrayVec::new();
@@ -509,7 +509,7 @@ impl Drop for StaticBundle {
     }
 }
 
-pub fn allocate_static_bundle(request: AllocationRequest) -> error::Result<StaticBundle> {
+pub fn allocate_static_bundle(request: AllocationRequest) -> error::ResultWithTrace<StaticBundle> {
     // SAFETY: No threads, no problem
     unsafe {
         #[allow(static_mut_refs)]
