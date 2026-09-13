@@ -316,7 +316,7 @@ impl Descriptor {
         DescriptorIterator { bytes }
     }
 
-    pub fn parse(bytes: &[u8]) -> Result<(Descriptor, &[u8]), error::Error> {
+    pub fn parse(bytes: &[u8]) -> error::ResultWithTrace<(Descriptor, &[u8])> {
         let (header, _) =
             DescriptorHeader::try_ref_from_prefix(bytes).map_err(convert_try_cast_error)?;
         if header.length < 2 {
@@ -332,7 +332,7 @@ impl Descriptor {
                 }
                 DeviceDescriptor::try_read_from_prefix(bytes)
                     .map(|(descriptor, bytes)| (Descriptor::Device(descriptor), bytes))
-                    .map_err(convert_try_read_error)
+                    .map_err(|err| convert_try_read_error(err).into())
             }
             DescriptorType::Configuration => {
                 if header.length as usize != size_of::<ConfigurationDescriptor>() {
@@ -340,7 +340,7 @@ impl Descriptor {
                 }
                 ConfigurationDescriptor::try_read_from_prefix(bytes)
                     .map(|(descriptor, bytes)| (Descriptor::Configuration(descriptor), bytes))
-                    .map_err(convert_try_read_error)
+                    .map_err(|err| convert_try_read_error(err).into())
             }
             DescriptorType::String => todo!(),
             DescriptorType::Interface => {
@@ -349,7 +349,7 @@ impl Descriptor {
                 }
                 InterfaceDescriptor::try_read_from_prefix(bytes)
                     .map(|(descriptor, bytes)| (Descriptor::Interface(descriptor), bytes))
-                    .map_err(convert_try_read_error)
+                    .map_err(|err| convert_try_read_error(err).into())
             }
             DescriptorType::Endpoint => {
                 if header.length as usize != size_of::<EndpointDescriptor>() {
@@ -357,7 +357,7 @@ impl Descriptor {
                 }
                 EndpointDescriptor::try_read_from_prefix(bytes)
                     .map(|(descriptor, bytes)| (Descriptor::Endpoint(descriptor), bytes))
-                    .map_err(convert_try_read_error)
+                    .map_err(|err| convert_try_read_error(err).into())
             }
             DescriptorType::DeviceQualifier => todo!(),
             DescriptorType::OtherSpeedConfiguration => todo!(),
@@ -870,7 +870,7 @@ impl Display for InterfaceProtocolType {
 }
 
 impl<'a> Iterator for DescriptorIterator<'a> {
-    type Item = error::Result<Descriptor>;
+    type Item = error::ResultWithTrace<Descriptor>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bytes.is_empty() {
@@ -924,7 +924,7 @@ impl<'a> DescriptorIterator<'a> {
     /// stream ends the walk here as `None` rather than as an error: the
     /// remaining length checks (interface and endpoint counts) are what detect
     /// the shortfall.
-    pub fn next_parsed(&mut self) -> Option<error::Result<Descriptor>> {
+    pub fn next_parsed(&mut self) -> Option<error::ResultWithTrace<Descriptor>> {
         loop {
             match self.next()? {
                 Ok(descriptor) => return Some(Ok(descriptor)),
