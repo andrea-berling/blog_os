@@ -31,7 +31,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
         unsafe { core::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
     }
 
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             buffer: [const { MaybeUninit::uninit() }; _],
             len: 0,
@@ -73,6 +73,16 @@ impl<T, const N: usize> ArrayVec<T, N> {
 
     pub fn capacity(&self) -> usize {
         N
+    }
+
+    pub fn truncate(&mut self, new_length: usize) {
+        while self.len() > new_length {
+            let _ = self.pop();
+        }
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.len() == self.capacity()
     }
 }
 
