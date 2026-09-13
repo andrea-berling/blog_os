@@ -9,6 +9,8 @@ use core::{
 use thiserror::Error;
 use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
+use crate::usb::setup::Address;
+
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
 
@@ -48,8 +50,14 @@ pub enum Context {
     SettingEHCIDeviceAddress,
     #[error("Getting device descriptor")]
     GettingDeviceDescriptor,
+    #[error("Getting configuration descriptor {0}")]
+    GettingConfigurationDescriptor(u8),
     #[error("Reading descriptor")]
     ReadingDescriptor,
+    #[error("Parsing interface descriptor")]
+    ParsingInterfaceDescriptor,
+    #[error("Parsing endpoint descriptor")]
+    ParsingEndpointDescriptor,
     #[error("Starting EHCI Schedule Execution")]
     StartingEHCIScheduleExecution,
     #[error("Stopping EHCI Schedule Execution")]
@@ -185,6 +193,10 @@ pub enum Fault {
     InvalidUSBDescriptorHeader,
     #[error("Fewer bytes available for a USB descriptor than the USB Device header requested")]
     FewerBytesThanUSBDeviceHeaderRequested,
+    #[error("Corrupt USB interface descriptor")]
+    CorruptUSBInterfaceDescriptor,
+    #[error("Corrupt USB endpoint descriptor")]
+    CorruptUSBEndpointDescriptor,
 }
 
 #[derive(Debug, Error, Clone, Copy)]
@@ -193,7 +205,7 @@ pub enum Feature {
     _1GBPages,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PciDevice {
     bus_number: u8,
     device_number: u8,
@@ -242,6 +254,10 @@ pub enum Facility {
     // PCI
     #[error("EHCI controller: {0}")]
     EhciController(PciDevice),
+
+    // USB
+    #[error("EHCI device {1} (EHCI controller: {0})")]
+    EhciDevice(PciDevice, Address),
 }
 
 #[derive(Clone, Copy, Debug, Error)]

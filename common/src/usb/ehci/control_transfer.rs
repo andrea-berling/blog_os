@@ -13,12 +13,13 @@ use crate::{
             },
         },
         setup::{
-            Address, Descriptor, DescriptorType, DeviceDescriptor, LanguageId, MaxPacketLength,
-            SetupData,
+            Address, ConfigurationDescriptor, Descriptor, DescriptorType, DeviceDescriptor,
+            LanguageId, MaxPacketLength, SetupData,
         },
     },
 };
 
+#[derive(Clone, Copy)]
 pub struct StandardParameters {
     pub address: Address,
     pub endpoint_speed: EndpointSpeed,
@@ -32,6 +33,7 @@ pub struct GetDescriptorStaticBundle {
     descriptor_alignment: usize,
 }
 
+#[derive(Clone, Copy)]
 pub struct GetDescriptorParameters {
     pub descriptor_type: DescriptorType,
     pub descriptor_length: u16,
@@ -44,22 +46,26 @@ impl GetDescriptorStaticBundle {
     pub fn get_descriptor(&self) -> error::Result<Descriptor> {
         match self.descriptor_type {
             DescriptorType::Device => {
-                // SAFETY: the address is inside a statically-allocated buffer page, so it's
-                // always mapped and aligned
                 DeviceDescriptor::try_read_from_bytes(self.get_descriptor_buffer())
                     .map(Descriptor::Device)
                     .map_err(|err| {
                         convert_try_read_error(err).with_context(Context::ReadingDescriptor)
                     })
             }
-            DescriptorType::Configuration => todo!(),
+            DescriptorType::Configuration => {
+                ConfigurationDescriptor::try_read_from_bytes(self.get_descriptor_buffer())
+                    .map(Descriptor::Configuration)
+                    .map_err(|err| {
+                        convert_try_read_error(err).with_context(Context::ReadingDescriptor)
+                    })
+            }
             DescriptorType::String => todo!(),
             DescriptorType::Interface => todo!(),
             DescriptorType::Endpoint => todo!(),
             DescriptorType::DeviceQualifier => todo!(),
             DescriptorType::OtherSpeedConfiguration => todo!(),
-            DescriptorType::Other(_) => todo!(),
             DescriptorType::InterfacePower => todo!(),
+            DescriptorType::Other(_) => todo!(),
         }
     }
 

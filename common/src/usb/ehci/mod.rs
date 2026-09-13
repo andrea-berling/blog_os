@@ -1,10 +1,12 @@
 use core::fmt::Display;
 
 use num_enum::TryFromPrimitive;
+use zerocopy::TryFromBytes;
 
 use crate::{
+    array_vec::ArrayVec8,
     bits::{self},
-    error::{self, Context, Error, Facility, Fault, PciDevice},
+    error::{self, Context, Error, Facility, Fault, PciDevice, convert_try_read_error},
     make_bitmap,
     mmio::{self, Maskable},
     pci::ConfigAddressRegister,
@@ -15,7 +17,10 @@ use crate::{
             control_transfer::{get_descriptor_bundle, set_address_bundle},
             queue_head::{EndpointSpeed, RawQueueHead},
         },
-        setup::{Address, Descriptor, DeviceDescriptor},
+        setup::{
+            Address, ConfigurationDescriptor, Descriptor, DeviceDescriptor, EndpointDescriptor,
+            InterfaceDescriptor,
+        },
     },
 };
 
@@ -181,6 +186,126 @@ pub struct Device {
     address: Address,
     default_endpoint_speed: EndpointSpeed,
     descriptor: DeviceDescriptor,
+    max_packet_size_endpoint_0: u16,
+}
+
+impl Device {
+    pub fn controller_address(&self) -> PciDevice {
+        self.controller_address
+    }
+
+    pub fn descriptor(&self) -> &DeviceDescriptor {
+        &self.descriptor
+    }
+
+    pub fn get_configuration_descriptor_full(
+        &self,
+        index: u8,
+        ehci_controller: &mut Controller,
+    ) -> error::Result<ArrayVec8<(InterfaceDescriptor, ArrayVec8<EndpointDescriptor>)>> {
+        let get_descriptor_error = Error::blank()
+            .with_facility(Facility::EhciDevice(
+                self.controller_address(),
+                self.address,
+            ))
+            .with_context(Context::GettingConfigurationDescriptor(index));
+
+        let standard_parameters = control_transfer::StandardParameters {
+            address: self.address,
+            endpoint_speed: self.default_endpoint_speed,
+            max_packet_length: Some(self.max_packet_size_endpoint_0.try_into()?),
+        };
+
+        let get_descriptor_parameters = control_transfer::GetDescriptorParameters {
+            descriptor_type: super::setup::DescriptorType::Configuration,
+            descriptor_length: size_of::<ConfigurationDescriptor>() as u16,
+            descriptor_alignment: align_of::<ConfigurationDescriptor>(),
+            descriptor_index: index,
+            lang_id: None,
+        };
+
+        let mut get_configuration_descriptor_bundle =
+            get_descriptor_bundle(standard_parameters, get_descriptor_parameters)?;
+
+        ehci_controller
+            .run_control_transfer(&get_configuration_descriptor_bundle)
+            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+
+        let configuration_descriptor = match get_configuration_descriptor_bundle
+            .get_descriptor()
+            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?
+        {
+            Descriptor::Configuration(descriptor) => descriptor,
+            unexpected => {
+                return Err(
+                    get_descriptor_error.with_fault(Fault::UnexpectedDescriptorType(
+                        unexpected.descriptor_type().into(),
+                    )),
+                );
+            }
+        };
+
+        let total_length = configuration_descriptor.total_length().get();
+
+        get_configuration_descriptor_bundle.initialize(
+            standard_parameters,
+            control_transfer::GetDescriptorParameters {
+                descriptor_length: total_length,
+                ..get_descriptor_parameters
+            },
+        )?;
+
+        ehci_controller
+            .run_control_transfer(&get_configuration_descriptor_bundle)
+            .map_err(|err| get_descriptor_error.with_fault(err.fault()))?;
+
+        let bytes = &get_configuration_descriptor_bundle.get_descriptor_buffer()
+            [size_of::<ConfigurationDescriptor>()..]
+            [..total_length as usize - size_of::<ConfigurationDescriptor>()];
+
+        let mut interface_descriptors = ArrayVec8::new();
+        let mut descriptors_iterator = Descriptor::traverse(bytes);
+        while interface_descriptors.len() < configuration_descriptor.n_interfaces() as usize
+            && let Some(descriptor) = descriptors_iterator.next_parsed()
+        {
+            if let Descriptor::Interface(interface_descriptor) = descriptor.map_err(|err| {
+                err.with_facility(Facility::EhciDevice(
+                    self.controller_address(),
+                    self.address,
+                ))
+                .with_context(Context::ParsingInterfaceDescriptor)
+            })? {
+                let mut endpoint_descriptors = ArrayVec8::<EndpointDescriptor>::new();
+                while endpoint_descriptors.len() < interface_descriptor.n_endpoints() as usize
+                    && let Some(subdescriptor) = descriptors_iterator.next_parsed()
+                {
+                    if let Descriptor::Endpoint(endpoint_descriptor) =
+                        subdescriptor.map_err(|err| {
+                            err.with_facility(Facility::EhciDevice(
+                                self.controller_address(),
+                                self.address,
+                            ))
+                            .with_context(Context::ParsingEndpointDescriptor)
+                        })?
+                    {
+                        endpoint_descriptors.try_push(endpoint_descriptor)?;
+                    }
+                }
+                if endpoint_descriptors.len() != interface_descriptor.n_endpoints() as usize {
+                    return Err(
+                        get_descriptor_error.with_fault(Fault::CorruptUSBEndpointDescriptor)
+                    );
+                }
+                interface_descriptors.try_push((interface_descriptor, endpoint_descriptors))?;
+            }
+        }
+
+        if interface_descriptors.len() != configuration_descriptor.n_interfaces() as usize {
+            return Err(get_descriptor_error.with_fault(Fault::CorruptUSBInterfaceDescriptor));
+        }
+
+        Ok(interface_descriptors)
+    }
 }
 
 impl HostControllerStructuralParameters {
@@ -539,6 +664,7 @@ impl Controller {
             endpoint_speed,
             max_packet_length: None,
         })?;
+
         self.run_control_transfer(&set_address_bundle)
             .map_err(|err| set_address_error.with_fault(err.fault()))?;
 
@@ -547,7 +673,6 @@ impl Controller {
         // FIXME: this is a busy-wait for now; switch to a timer-interrupt based sleep once
         // one exists
         timer::LowPrecisionTimer::wait_for_ms(Self::SET_ADDRESS_RECOVERY_DELAY_MS);
-        self.stop()?;
         let device_descriptor_prefix_length = DeviceDescriptor::max_packet_size_endpoint_0_offset()
             .clamp(
                 super::setup::SMALLEST_LEGAL_MAX_PACKET_SIZE as usize,
@@ -611,7 +736,12 @@ impl Controller {
             controller_address: self.pci_config_addr.clone().into(),
             default_endpoint_speed: endpoint_speed,
             descriptor,
+            max_packet_size_endpoint_0,
         })
+    }
+
+    pub fn pci_config_addr(&self) -> &ConfigAddressRegister {
+        &self.pci_config_addr
     }
 
     pub fn run_control_transfer(&mut self, bundle: &StaticBundle) -> error::Result<()> {
@@ -623,7 +753,7 @@ impl Controller {
             !bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
             , wait_for_ms: 2)
         {
-            self.stop()?;
+            let _ = self.stop();
             return Err(err);
         }
 

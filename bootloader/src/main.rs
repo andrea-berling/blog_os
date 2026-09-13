@@ -9,7 +9,7 @@
 use common::{
     array_vec::ArrayVec8,
     elf::program_header::ProgramHeaderEntryType,
-    usb::{self, ehci::queue_head::EndpointSpeed},
+    usb::{self, ehci::queue_head::EndpointSpeed, setup::InterfaceClassType},
 };
 use core::arch::{asm, naked_asm};
 
@@ -55,7 +55,9 @@ const GDTI_TSS: usize = 5;
 fn panic(info: &PanicInfo) -> ! {
     vga::writeln_no_sync!("{info:#?}");
     serial::log::debug_no_sync!("{info:#?}");
-    loop {}
+    loop {
+        core::hint::spin_loop()
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -501,10 +503,75 @@ fn load_kernel_from_boot_disk(
         }
         Err(_) => {
             error::clear_global_error_chain_no_sync();
-            let (usb_controllers, usb_devices) = enumerate_usb_devices().map_err(|err| {
-                error::push_to_global_error_chain_no_sync(err);
-                error.with_fault(Fault::IOError)
-            })?;
+            let (mut usb_controllers, mut usb_devices) =
+                enumerate_usb_devices().map_err(|err| {
+                    error::push_to_global_error_chain_no_sync(err);
+                    error.with_fault(Fault::IOError)
+                })?;
+
+            #[inline(always)]
+            fn warn_and_skip(msg: &str) {
+                serial::log::debug_no_sync!("Warning: {msg}. Skipping");
+            }
+
+            'usb_devices_loop: for usb_device in &mut usb_devices {
+                serial::log::debug_no_sync!("Trying device {}", usb_device.controller_address());
+                let Some(corresponding_controller) =
+                    usb_controllers.iter_mut().find(|controller| {
+                        error::PciDevice::from(controller.pci_config_addr().clone())
+                            == usb_device.controller_address()
+                    })
+                else {
+                    warn_and_skip("no corresponding controller");
+                    continue;
+                };
+
+                match usb_device.descriptor().get_class_type() {
+                    Some(usb::DeviceClassType::UseInterfaceDescriptors) => {
+                        for configuration_index in 0..usb_device.descriptor().n_configurations() {
+                            let Ok(interface_descriptors) = usb_device
+                                .get_configuration_descriptor_full(
+                                    configuration_index,
+                                    corresponding_controller,
+                                )
+                            else {
+                                warn_and_skip("couldn't get full configuration descriptor");
+                                continue 'usb_devices_loop;
+                            };
+                            for (interface_index, (interface_descriptor, endpoint_descriptors)) in
+                                interface_descriptors.iter().enumerate()
+                            {
+                                serial::log::debug_no_sync!(
+                                    "Interface {interface_index}:\n{}",
+                                    interface_descriptor
+                                );
+                                for (endpoint_index, endpoint_descriptor) in
+                                    endpoint_descriptors.iter().enumerate()
+                                {
+                                    serial::log::debug_no_sync!(
+                                        "Endpoint {endpoint_index}:\n{}",
+                                        endpoint_descriptor
+                                    );
+                                }
+                                let Some(InterfaceClassType::MassStorage) =
+                                    interface_descriptor.get_class_type()
+                                else {
+                                    continue;
+                                };
+                                todo!("Let's have some fun")
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        warn_and_skip("unexpected device class code (expected 0x00)");
+                        continue;
+                    }
+                    None => {
+                        warn_and_skip("invalid class returned");
+                        continue;
+                    }
+                }
+            }
 
             todo!()
         }
