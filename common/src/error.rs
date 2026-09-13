@@ -9,7 +9,7 @@ use core::{
 use thiserror::Error;
 use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
-use crate::usb::setup::Address;
+use crate::{    array_vec::{ArrayVec, ArrayVec8}, usb::setup::Address};
 
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
@@ -197,6 +197,12 @@ pub enum Fault {
     CorruptUSBInterfaceDescriptor,
     #[error("Corrupt USB endpoint descriptor")]
     CorruptUSBEndpointDescriptor,
+    #[error("Corrupt ELF header: stored object type 0x{0:04x} is invalid")]
+    CorruptELFHeader(u16),
+    #[error("Corrupt ELF section header entry: stored section type 0x{0:08x} is invalid")]
+    CorruptELFSectionHeaderEntry(u32),
+    #[error("Corrupt ELF program header entry: stored segment type 0x{0:08x} is invalid")]
+    CorruptELFProgramHeaderEntry(u32),
 }
 
 #[derive(Debug, Error, Clone, Copy)]
@@ -277,8 +283,71 @@ pub struct ErrorChain<const N: usize> {
     theres_more: bool,
 }
 
+impl<const N: usize> ErrorChain<N> {
+    fn push(&mut self, error: Error) {
+        if self.length == N {
+            self.theres_more = true;
+            return;
+        }
+        self.errors[self.length] = error;
+        self.length += 1;
+    }
+
+    fn clear(&mut self) {
+        self.length = 0;
+        self.theres_more = false;
+    }
+}
+
+impl<const N: usize> core::fmt::Display for ErrorChain<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        enum Iter<'a> {
+            LeafToRoot(core::slice::Iter<'a, Error>),
+            RootToLeaf(core::iter::Rev<core::slice::Iter<'a, Error>>),
+        }
+        let iterator = self.errors[0..self.length].iter();
+        let iterator = if f.alternate() && !self.theres_more {
+            Iter::RootToLeaf(iterator.rev())
+        } else {
+            Iter::LeafToRoot(iterator)
+        };
+
+        impl<'a> Iterator for Iter<'a> {
+            type Item = &'a Error;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    Iter::LeafToRoot(iter) => iter.next(),
+                    Iter::RootToLeaf(rev) => rev.next(),
+                }
+            }
+        }
+
+        writeln!(f, "Error:")?;
+        for (i, error) in iterator.enumerate() {
+            writeln!(f, "{error}")?;
+            if i != self.length - 1 {
+                writeln!(f, "{}", if f.alternate() { "Due to:" } else { "Causing:" })?;
+            }
+        }
+
+        if self.theres_more {
+            writeln!(f, "Error chaing length was truncated to {N}, there's more")?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct ErrorWithTrace {
+    primary: Error,
+    theres_more: bool,
+}
+
 pub const VALUE_LENGTH_BYTES: usize = 20;
 pub const TYPE_NAME_LENGTH_BYTES: usize = 40;
+
+pub type ResultWithTrace<T> = core::result::Result<T, ErrorWithTrace>;
 
 impl PciDevice {
     pub fn new(bus_number: u8, device_number: u8, function_number: u8) -> Self {
@@ -324,22 +393,6 @@ impl Error {
     }
 }
 
-impl<const N: usize> ErrorChain<N> {
-    fn push(&mut self, error: Error) {
-        if self.length == N {
-            self.theres_more = true;
-            return;
-        }
-        self.errors[self.length] = error;
-        self.length += 1;
-    }
-
-    fn clear(&mut self) {
-        self.length = 0;
-        self.theres_more = false;
-    }
-}
-
 impl<const N: usize> From<&[u8]> for Prelude<N> {
     fn from(value: &[u8]) -> Self {
         let mut inner_value = [0; N];
@@ -348,6 +401,56 @@ impl<const N: usize> From<&[u8]> for Prelude<N> {
             .index_mut(range)
             .copy_from_slice(value.index(range));
         Self(inner_value)
+    }
+}
+
+impl ErrorWithTrace {
+    pub fn push_lossy(&mut self, error: Error) {
+        debug_assert!(
+            !matches!(error.fault(), Fault::None),
+            "an error frame must carry a fault"
+        );
+        let trace = &raw mut GLOBAL_ERROR_TRACE;
+        // SAFETY: no threads means no concurrent access
+        let trace = unsafe { &mut *trace };
+        if trace.try_push(error).is_err() {
+            self.theres_more = true
+        }
+    }
+
+    pub fn replace_primary(&mut self, new_primary: Error) {
+        debug_assert!(
+            !matches!(new_primary.fault(), Fault::None),
+            "an error frame must carry a fault"
+        );
+        let previous_primary = self.primary;
+        self.push_lossy(previous_primary);
+        self.primary = new_primary;
+    }
+
+    pub fn with_context(self, context: Context) -> Self {
+        Self {
+            primary: self.primary.with_context(context),
+            ..self
+        }
+    }
+
+    pub fn with_facility(self, facility: Facility) -> Self {
+        Self {
+            primary: self.primary.with_facility(facility),
+            ..self
+        }
+    }
+
+    pub fn with_fault(self, fault: Fault) -> Self {
+        Self {
+            primary: self.primary.with_fault(fault),
+            ..self
+        }
+    }
+
+    pub fn fault(&self) -> Fault {
+        self.primary.fault()
     }
 }
 
@@ -369,6 +472,38 @@ impl From<Context> for Error {
     }
 }
 
+impl From<Error> for ErrorWithTrace {
+    fn from(value: Error) -> Self {
+        // SAFETY: no threads means no concurrent access
+        #[allow(static_mut_refs)]
+        unsafe {
+            GLOBAL_ERROR_TRACE.truncate(0);
+        };
+        Self {
+            primary: value,
+            theres_more: false,
+        }
+    }
+}
+
+impl From<Fault> for ErrorWithTrace {
+    fn from(fault: Fault) -> Self {
+        Self::from(Error::from(fault))
+    }
+}
+
+impl From<Facility> for ErrorWithTrace {
+    fn from(facility: Facility) -> Self {
+        Self::from(Error::from(facility))
+    }
+}
+
+impl From<Context> for ErrorWithTrace {
+    fn from(context: Context) -> Self {
+        Self::from(Error::from(context))
+    }
+}
+
 impl<const N: usize> core::fmt::Debug for Prelude<N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
@@ -385,40 +520,33 @@ impl Display for PciDevice {
     }
 }
 
-impl<const N: usize> core::fmt::Display for ErrorChain<N> {
+impl core::fmt::Display for ErrorWithTrace {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        enum Iter<'a> {
-            LeafToRoot(core::slice::Iter<'a, Error>),
-            RootToLeaf(core::iter::Rev<core::slice::Iter<'a, Error>>),
-        }
-        let iterator = self.errors[0..self.length].iter();
-        let iterator = if f.alternate() && !self.theres_more {
-            Iter::RootToLeaf(iterator.rev())
-        } else {
-            Iter::LeafToRoot(iterator)
-        };
-
-        impl<'a> Iterator for Iter<'a> {
-            type Item = &'a Error;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self {
-                    Iter::LeafToRoot(iter) => iter.next(),
-                    Iter::RootToLeaf(rev) => rev.next(),
-                }
-            }
-        }
+        let trace = &raw mut GLOBAL_ERROR_TRACE;
+        // SAFETY: no threads means no concurrent access
+        let trace = unsafe { &mut *trace };
 
         writeln!(f, "Error:")?;
-        for (i, error) in iterator.enumerate() {
-            writeln!(f, "{error}")?;
-            if i != self.length - 1 {
-                writeln!(f, "{}", if f.alternate() { "Due to:" } else { "Causing:" })?;
+        if f.alternate() {
+            for cause in trace.iter() {
+                writeln!(f, "{cause}")?;
+                writeln!(f, "Causing:")?;
+            }
+            writeln!(f, "{}", self.primary)?;
+        } else {
+            writeln!(f, "{}", self.primary)?;
+            for cause in trace.iter().rev() {
+                writeln!(f, "Caused by:")?;
+                writeln!(f, "{cause}")?;
             }
         }
 
         if self.theres_more {
-            writeln!(f, "Error chaing length was truncated to {N}, there's more")?;
+            writeln!(
+                f,
+                "Error chain length was truncated at {}, there's more",
+                trace.len()
+            )?;
         }
 
         Ok(())
@@ -446,6 +574,30 @@ macro_rules! with {
     };
 }
 
+#[macro_export]
+macro_rules! try_with_trace {
+    ($expr:expr, $(context: $context:expr,)? $(facility: $facility:expr)?) => {
+        match $expr {
+            Ok(value) => value,
+            Err(err) => {
+                let err: $crate::error::ErrorWithTrace = err.into();
+                return Err(err$(.with_context($context))?$(.with_facility($facility))?);
+            }
+        }
+    };
+    ($expr:expr, fail_with: $parent_error:expr) => {
+        match $expr {
+            Ok(value) => value,
+            Err(err) => {
+                let mut err: $crate::error::ErrorWithTrace = err.into();
+                err.replace_primary($parent_error);
+                return Err(err);
+            }
+        }
+    };
+}
+
+pub use try_with_trace;
 pub use with;
 
 pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
@@ -519,3 +671,6 @@ static mut GLOBAL_ERROR_CHAIN: ErrorChain<MAX_ERROR_CHAIN_LENGTH> = ErrorChain {
     length: 0,
     theres_more: false,
 };
+
+static MAX_TRACE_LENGTH: usize = 5;
+static mut GLOBAL_ERROR_TRACE: ArrayVec<Error, MAX_TRACE_LENGTH> = const { ArrayVec::new() };
