@@ -383,17 +383,17 @@ impl SetupData {
         descriptor_index: u8,
         lang_id: Option<LanguageId>,
         descriptor_length: u16,
-    ) -> error::Result<SetupData> {
+    ) -> SetupData {
         let mut value = 0u16;
         bits::set_bits!(bits_expr: value, value: u8::from(descriptor_type), n_bits: 8, starts_at_bit: 8, bits_expr_ty: u16);
         bits::set_bits!(bits_expr: value, value: descriptor_index, n_bits: 8, starts_at_bit: 0, bits_expr_ty: u16);
-        Ok(Self {
+        Self {
             request_type: BmRequestType::get_descriptor(),
             request: Request::GetDescriptor,
             value,
             index: lang_id.map_or(0, |_| todo!()),
             length: descriptor_length,
-        })
+        }
     }
 }
 

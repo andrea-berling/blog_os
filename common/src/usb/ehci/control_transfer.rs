@@ -103,7 +103,7 @@ impl GetDescriptorStaticBundle {
             descriptor_index,
             lang_id,
             descriptor_length,
-        )?)?;
+        ))?;
 
         self.logically_link_qtds(
             QtdLinkSource::QueueTransferDescriptor(QueueTransferDescriptorIndex::from(1)),
