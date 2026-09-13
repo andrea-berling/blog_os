@@ -1,7 +1,6 @@
 use core::fmt::Display;
 
 use num_enum::TryFromPrimitive;
-use zerocopy::TryFromBytes;
 
 use crate::{
     array_vec::ArrayVec8,
