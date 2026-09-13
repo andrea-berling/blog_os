@@ -39,6 +39,15 @@ over panicking: asserts are only acceptable for internal invariants that are pro
 unreachable, with a comment explaining why (see the `expect("the 2-bit field ...")`
 pattern in `queue_head.rs`).
 
+- Fallible functions that propagate errors from other fallible calls return
+  `error::ResultWithTrace<T>`; return plain `error::Result<T>` only for leaf producers
+  whose error is one fault with no context of its own: shallow `From`/`TryFrom`
+  conversions, small validators, and containers.
+- Propagate with `attempt_traced!` instead of `?`: `context:`/`facility:` decorate the
+  current error, `fail_with:` records the received error as a cause and installs this
+  frame's complete error, which must carry a real `Fault`. Use bare `?` only for pure
+  pass-through.
+
 ## Unsafe code
 
 - Every `unsafe` block needs a `SAFETY:` comment explaining how the safety contract is
