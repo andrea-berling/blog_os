@@ -9,7 +9,7 @@ use core::{
 use thiserror::Error;
 use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
-use crate::{    array_vec::{ArrayVec, ArrayVec8}, usb::setup::Address};
+use crate::{array_vec::ArrayVec, usb::setup::Address};
 
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
@@ -275,69 +275,6 @@ pub struct Error {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-
-#[derive(Debug)]
-pub struct ErrorChain<const N: usize> {
-    errors: [Error; N],
-    length: usize,
-    theres_more: bool,
-}
-
-impl<const N: usize> ErrorChain<N> {
-    fn push(&mut self, error: Error) {
-        if self.length == N {
-            self.theres_more = true;
-            return;
-        }
-        self.errors[self.length] = error;
-        self.length += 1;
-    }
-
-    fn clear(&mut self) {
-        self.length = 0;
-        self.theres_more = false;
-    }
-}
-
-impl<const N: usize> core::fmt::Display for ErrorChain<N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        enum Iter<'a> {
-            LeafToRoot(core::slice::Iter<'a, Error>),
-            RootToLeaf(core::iter::Rev<core::slice::Iter<'a, Error>>),
-        }
-        let iterator = self.errors[0..self.length].iter();
-        let iterator = if f.alternate() && !self.theres_more {
-            Iter::RootToLeaf(iterator.rev())
-        } else {
-            Iter::LeafToRoot(iterator)
-        };
-
-        impl<'a> Iterator for Iter<'a> {
-            type Item = &'a Error;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self {
-                    Iter::LeafToRoot(iter) => iter.next(),
-                    Iter::RootToLeaf(rev) => rev.next(),
-                }
-            }
-        }
-
-        writeln!(f, "Error:")?;
-        for (i, error) in iterator.enumerate() {
-            writeln!(f, "{error}")?;
-            if i != self.length - 1 {
-                writeln!(f, "{}", if f.alternate() { "Due to:" } else { "Causing:" })?;
-            }
-        }
-
-        if self.theres_more {
-            writeln!(f, "Error chaing length was truncated to {N}, there's more")?;
-        }
-
-        Ok(())
-    }
-}
 
 pub struct ErrorWithTrace {
     primary: Error,
@@ -642,35 +579,6 @@ pub fn convert_try_cast_error<U: TryFromBytes>(err: TryCastError<&[u8], U>) -> E
     }
     .into()
 }
-
-pub fn get_global_error_chain_no_sync() -> &'static ErrorChain<MAX_ERROR_CHAIN_LENGTH> {
-    let error_chain_ptr = &raw const GLOBAL_ERROR_CHAIN;
-    // SAFETY: no threads means no concurrent access
-    unsafe { &*error_chain_ptr }
-}
-
-pub fn push_to_global_error_chain_no_sync(error: Error) {
-    let error_chain_ptr = &raw mut GLOBAL_ERROR_CHAIN;
-    // SAFETY: no threads means no concurrent access
-    let error_chain = unsafe { &mut *error_chain_ptr };
-
-    error_chain.push(error);
-}
-
-pub fn clear_global_error_chain_no_sync() {
-    let error_chain_ptr = &raw mut GLOBAL_ERROR_CHAIN;
-    // SAFETY: no threads means no concurrent access
-    let error_chain = unsafe { &mut *error_chain_ptr };
-
-    error_chain.clear();
-}
-
-static MAX_ERROR_CHAIN_LENGTH: usize = 5;
-static mut GLOBAL_ERROR_CHAIN: ErrorChain<MAX_ERROR_CHAIN_LENGTH> = ErrorChain {
-    errors: [Error::blank(); MAX_ERROR_CHAIN_LENGTH],
-    length: 0,
-    theres_more: false,
-};
 
 static MAX_TRACE_LENGTH: usize = 5;
 static mut GLOBAL_ERROR_TRACE: ArrayVec<Error, MAX_TRACE_LENGTH> = const { ArrayVec::new() };
