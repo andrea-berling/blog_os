@@ -36,7 +36,7 @@ pub struct GetDescriptorParameters {
     pub descriptor_type: DescriptorType,
     pub descriptor_length: u16,
     pub descriptor_alignment: usize,
-    pub descriptor_index: usize,
+    pub descriptor_index: u8,
     pub lang_id: Option<LanguageId>,
 }
 
@@ -58,6 +58,7 @@ impl GetDescriptorStaticBundle {
             DescriptorType::Endpoint => todo!(),
             DescriptorType::DeviceQualifier => todo!(),
             DescriptorType::OtherSpeedConfiguration => todo!(),
+            DescriptorType::Other(_) => todo!(),
             DescriptorType::InterfacePower => todo!(),
         }
     }

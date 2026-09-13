@@ -7,7 +7,7 @@ use core::{
 // TODO: sort things in order
 
 use thiserror::Error;
-use zerocopy::{TryFromBytes, TryReadError};
+use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
@@ -136,8 +136,6 @@ pub enum Fault {
     NoUSBLEGSUP,
     #[error("EHCI Extended Capabilities Pointer not available")]
     NoEECP,
-    #[error("EHCI Controller is not halted")]
-    EhciControllerNotHalted,
     #[error("Invalid USB Address: {0:#x}")]
     InvalidUSBAddress(u8),
     #[error("Invalid USB Max Packet length: {0}")]
@@ -181,6 +179,12 @@ pub enum Fault {
     OutOfBoundsBitSetIndex { index: usize, max_size: usize },
     #[error("Invalid EHCI buffer page offset: {offset} (max: {max})")]
     InvalidEHCIBufferOffset { offset: usize, max: usize },
+    #[error("Not enough bytes for a USB descriptor")]
+    NotEnoughBytesForAUSBDescriptor,
+    #[error("Invalid USB descriptor header")]
+    InvalidUSBDescriptorHeader,
+    #[error("Fewer bytes available for a USB descriptor than the USB Device header requested")]
+    FewerBytesThanUSBDeviceHeaderRequested,
 }
 
 #[derive(Debug, Error, Clone, Copy)]
@@ -436,6 +440,24 @@ pub fn bounded_context<const N: usize>(context_bytes: &[u8]) -> [u8; N] {
 }
 
 pub fn convert_try_read_error<U: TryFromBytes>(err: TryReadError<&[u8], U>) -> Error {
+    let dst_type = core::any::type_name::<U>().as_bytes();
+    match err {
+        zerocopy::ConvertError::Alignment(_) => {
+            unreachable!()
+        }
+        zerocopy::ConvertError::Size(size_error) => Fault::InvalidSizeForType {
+            size: size_error.into_src().len(),
+            dst_type_name: dst_type.into(),
+        },
+        zerocopy::ConvertError::Validity(validity_error) => Fault::InvalidValueForType {
+            value: validity_error.into_src().into(),
+            dst_type_name: dst_type.into(),
+        },
+    }
+    .into()
+}
+
+pub fn convert_try_cast_error<U: TryFromBytes>(err: TryCastError<&[u8], U>) -> Error {
     let dst_type = core::any::type_name::<U>().as_bytes();
     match err {
         zerocopy::ConvertError::Alignment(_) => {

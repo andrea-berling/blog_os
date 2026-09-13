@@ -600,7 +600,7 @@ impl Controller {
             unexpected => {
                 return Err(
                     get_descriptor_error.with_fault(Fault::UnexpectedDescriptorType(
-                        unexpected.descriptor_type() as u8,
+                        unexpected.descriptor_type().into(),
                     )),
                 );
             }

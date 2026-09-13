@@ -2,39 +2,24 @@ use core::fmt::Display;
 
 use num_enum::TryFromPrimitive;
 
+use crate::error;
+
 pub mod ehci;
 pub mod setup;
 
 #[derive(TryFromPrimitive)]
 #[repr(u8)]
-pub enum ClassType {
+pub enum DeviceClassType {
     UseInterfaceDescriptors,
-    Audio,
-    Communications,
-    HumanInterfaceDevice,
-    Physical = 5,
-    StillImaging,
-    Printer,
-    MassStorage,
-    Hub,
-    CDCDataDevice,
-    SmartCard,
-    ContentSecurity,
-    Video,
-    PersonalHealthcare,
-    AudioVideo,
-    Billboard,
-    USBCBridge,
-    USBBulckDisplayProtocol,
-    MCTPOverUSBProtocolEndpoint,
-    I3C = 0x3c,
+    Communications = 0x02,
+    Hub = 0x09,
+    Billboard = 0x11,
     Diagnostic = 0xdc,
-    WirelessController = 0xe0,
     Miscellaneous = 0xef,
-    ApplicationSpecific = 0xfe,
     VendorSpecific = 0xff,
 }
 
+#[derive(Debug)]
 pub enum Class {
     UseInterfaceDescriptors, // 0,
     Audio,
@@ -63,6 +48,8 @@ pub enum Class {
     VendorSpecific,      // = 0xff,
 }
 
+#[derive(Debug, TryFromPrimitive)]
+#[repr(u8)]
 pub enum MassStorageSubclass {
     SCSICommandSetNotReported,
     Rbc,
@@ -77,47 +64,50 @@ pub enum MassStorageSubclass {
     VendorSpecific, // 0xff
 }
 
+#[derive(Debug)]
+#[repr(u8)]
 pub enum MassStorageProtocol {
     CBIWithCommandCompletionInterrupt,
     CBIWithoutCommandCompletionInterrupt,
+    Obsolete,
     Reserved03h4fh,
-    Bbb, // 0x50
+    Bbb = 0x50,
     Reserved51h61h,
-    Uas, // 0x62
+    Uas = 0x62,
     Reserved63hfeh,
     VendorSpecific, // 0xff
 }
 
-impl Display for ClassType {
+impl Display for DeviceClassType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ClassType::UseInterfaceDescriptors => {
+            DeviceClassType::UseInterfaceDescriptors => {
                 write!(f, "Use class code info from Interface Descriptors")
             }
-            ClassType::Audio => write!(f, "Audio"),
-            ClassType::Communications => write!(f, "Communications and CDC Control"),
-            ClassType::HumanInterfaceDevice => write!(f, "Human Interface Device"),
-            ClassType::Physical => write!(f, "Physical"),
-            ClassType::StillImaging => write!(f, "Still Imaging"),
-            ClassType::Printer => write!(f, "Printer"),
-            ClassType::MassStorage => write!(f, "Mass Storage"),
-            ClassType::Hub => write!(f, "Hub"),
-            ClassType::CDCDataDevice => write!(f, "CDC-Data"),
-            ClassType::SmartCard => write!(f, "Smart Card"),
-            ClassType::ContentSecurity => write!(f, "Content Security"),
-            ClassType::Video => write!(f, "Video"),
-            ClassType::PersonalHealthcare => write!(f, "Personal Healthcare"),
-            ClassType::AudioVideo => write!(f, "Audio/Video Devices"),
-            ClassType::Billboard => write!(f, "Billboard"),
-            ClassType::USBCBridge => write!(f, "USB Type-C Bridge"),
-            ClassType::USBBulckDisplayProtocol => write!(f, "USB Bulk Display Protocol"),
-            ClassType::MCTPOverUSBProtocolEndpoint => write!(f, "MCTP over USB Protocol Endpoint"),
-            ClassType::I3C => write!(f, "I3C Device"),
-            ClassType::Diagnostic => write!(f, "Diagnostic Device"),
-            ClassType::WirelessController => write!(f, "Wireless Controller"),
-            ClassType::Miscellaneous => write!(f, "Miscellaneous"),
-            ClassType::ApplicationSpecific => write!(f, "Application Specific"),
-            ClassType::VendorSpecific => write!(f, "Vendor Specific"),
+            DeviceClassType::Communications => write!(f, "Communications and CDC Control"),
+            DeviceClassType::Hub => write!(f, "Hub"),
+            DeviceClassType::Billboard => write!(f, "Billboard"),
+            DeviceClassType::Diagnostic => write!(f, "Diagnostic Device"),
+            DeviceClassType::Miscellaneous => write!(f, "Miscellaneous"),
+            DeviceClassType::VendorSpecific => write!(f, "Vendor Specific"),
+        }
+    }
+}
+
+impl TryFrom<u8> for MassStorageProtocol {
+    type Error = error::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::CBIWithCommandCompletionInterrupt),
+            0x01 => Ok(Self::CBIWithCommandCompletionInterrupt),
+            0x02 => Ok(Self::Obsolete),
+            0x03..=0x4f => Ok(Self::Reserved03h4fh),
+            0x50 => Ok(Self::Bbb),
+            0x51..=0x61 => Ok(Self::Reserved51h61h),
+            0x62 => Ok(Self::Uas),
+            0x63..=0xfe => Ok(Self::Reserved63hfeh),
+            0xff => Ok(Self::VendorSpecific),
         }
     }
 }
