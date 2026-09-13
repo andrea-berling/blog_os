@@ -337,7 +337,9 @@ extern "cdecl" fn general_protection_handler(
         error_code
     );
     vga::writeln_no_sync!("CR2={:08X} CR3={:08X}", cr2, cr3);
-    loop {}
+    loop {
+        core::hint::spin_loop()
+    }
 }
 
 #[unsafe(naked)]
