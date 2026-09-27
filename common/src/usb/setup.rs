@@ -36,6 +36,7 @@ pub enum BmRequestTypeBit {
 make_bitmap!(new_type: BmRequestType, underlying_flag_type: BmRequestTypeBit, repr: u8, nodisplay);
 
 #[repr(u8)]
+// TODO: make it a non-primitive enum with a NonStandard(u8) case, adjust all the "as u8" sites
 pub enum Request {
     GetStatus,
     ClearFeature,
@@ -48,6 +49,7 @@ pub enum Request {
     GetInterface,
     SetInterface,
     SynchFrame,
+    _FEh = 0xfe,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +63,14 @@ pub enum DescriptorType {
     OtherSpeedConfiguration,
     InterfacePower,
     Other(u8),
+}
+
+#[repr(u16)]
+#[derive(Clone, Copy, Debug)]
+pub enum Feature {
+    EndpointHalt,
+    DeviceRemoteWakeup,
+    TestMode,
 }
 
 #[derive(TryFromBytes)]
@@ -107,7 +117,7 @@ pub struct ConfigurationDescriptor {
     header: DescriptorHeader,
     total_length: U16<LE>,
     n_interfaces: u8,
-    configuration_value: u8,
+    configuration_value: ConfigurationValue,
     string_index: u8,
     attributes: ConfigurationAttributes,
     max_power: u8,
@@ -144,7 +154,7 @@ pub enum InterfaceClassType {
 #[repr(C)]
 pub struct InterfaceDescriptor {
     header: DescriptorHeader,
-    interface_number: u8,
+    interface_number: InterfaceNumber,
     alternate_setting: u8,
     n_endpoints: u8,
     class: u8,
@@ -198,7 +208,7 @@ pub struct SetupData {
     length: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct EndpointNumber(u8);
 
 #[derive(TryFromPrimitive, Debug)]
@@ -231,11 +241,17 @@ pub enum UsageType {
 #[derive(Clone, Copy)]
 pub struct LanguageId;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Address(u8);
 
 #[derive(Clone, Copy)]
 pub struct MaxPacketLength(u16);
+
+#[derive(Clone, Copy, Debug, Default, TryFromBytes)]
+pub struct ConfigurationValue(u8);
+
+#[derive(Clone, Copy, Debug, Default, TryFromBytes)]
+pub struct InterfaceNumber(u8);
 
 /// A single-step walker over a byte buffer of USB descriptors.
 ///
@@ -258,8 +274,7 @@ pub struct DescriptorIterator<'a> {
 }
 
 impl BmRequestType {
-    /// Returns a BmRequestType fit for a SET_ADDRESS request
-    pub fn set_address() -> Self {
+    fn host_to_device_no_data() -> Self {
         let mut result = Self::default();
         result.set_type(RequestType::Standard);
         result.set_recipient(Recipient::Device);
@@ -267,11 +282,40 @@ impl BmRequestType {
         result
     }
 
+    /// Returns a BmRequestType fit for a SET_ADDRESS request
+    pub fn set_address() -> Self {
+        Self::host_to_device_no_data()
+    }
+
     pub fn get_descriptor() -> Self {
         let mut result = Self::default();
         result.set_type(RequestType::Standard);
         result.set_recipient(Recipient::Device);
         result.set_flag(BmRequestTypeBit::DeviceToHost);
+        result
+    }
+
+    pub fn set_configuration() -> Self {
+        Self::host_to_device_no_data()
+    }
+
+    pub fn get_max_lun() -> Self {
+        let mut result = Self::default();
+        result.set_type(RequestType::Class);
+        result.set_recipient(Recipient::Interface);
+        result.set_flag(BmRequestTypeBit::DeviceToHost);
+        result
+    }
+
+    pub fn clear_feature(feature: Feature) -> Self {
+        let mut result = Self::default();
+        result.set_type(RequestType::Standard);
+        result.set_recipient(match feature {
+            Feature::EndpointHalt => Recipient::Endpoint,
+            Feature::DeviceRemoteWakeup => Recipient::Device,
+            Feature::TestMode => Recipient::Device,
+        });
+        result.clear_flag(BmRequestTypeBit::DeviceToHost);
         result
     }
 
@@ -393,6 +437,40 @@ impl SetupData {
             value,
             index: lang_id.map_or(0, |_| todo!()),
             length: descriptor_length,
+        }
+    }
+
+    pub fn set_configuration(configuration_value: ConfigurationValue) -> SetupData {
+        Self {
+            request_type: BmRequestType::set_configuration(),
+            request: Request::SetConfiguration,
+            value: u8::from(configuration_value).into(),
+            index: 0,
+            length: 0,
+        }
+    }
+
+    pub fn get_max_lun(interface_number: InterfaceNumber) -> SetupData {
+        Self {
+            request_type: BmRequestType::get_max_lun(),
+            request: Request::GET_MAX_LUN,
+            value: 0,
+            index: u8::from(interface_number).into(),
+            length: 1,
+        }
+    }
+
+    pub fn clear_endpoint_feature(
+        endpoint_address: EndpointAddress,
+        feature: Feature,
+    ) -> SetupData {
+        // TODO: check that the feature is for an endpoint
+        Self {
+            request_type: BmRequestType::clear_feature(feature),
+            request: Request::ClearFeature,
+            value: feature.into(),
+            index: endpoint_address.raw() as u16,
+            length: 0,
         }
     }
 }
@@ -559,10 +637,18 @@ impl core::fmt::Display for Address {
 }
 
 impl EndpointAddress {
+    pub const CONTROL: Self = Self {
+        bits: EndpointNumber::CONTROL.0,
+    };
+
     pub fn get_number(&self) -> EndpointNumber {
         EndpointNumber(
             bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 0, return_ty: u8),
         )
+    }
+
+    pub fn raw(&self) -> u8 {
+        self.bits
     }
 }
 
@@ -576,7 +662,7 @@ impl InterfaceAttributes {
         TransferType::try_from(
             bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 0, return_ty: u8),
         )
-        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
+        .expect("this can't happen: 2 bits, four enum cases, always successful conversion")
     }
 
     /// Returns synchronization type of this [`InterfaceAttributes`].
@@ -588,7 +674,7 @@ impl InterfaceAttributes {
         SynchronizationType::try_from(
             bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 2, return_ty: u8),
         )
-        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
+        .expect("this can't happen: 2 bits, four enum cases, always successful conversion")
     }
 
     /// Returns usage type of this [`InterfaceAttributes`].
@@ -600,7 +686,7 @@ impl InterfaceAttributes {
         UsageType::try_from(
             bits::get_bits!(bits_expr: self.bits, n_bits: 2, starts_at_bit: 4, return_ty: u8),
         )
-        .expect("this can't heappen: 2 bits, four enum cases, always successful conversion")
+        .expect("this can't happen: 2 bits, four enum cases, always successful conversion")
     }
 }
 
@@ -733,6 +819,10 @@ impl InterfaceDescriptor {
     pub fn n_endpoints(&self) -> u8 {
         self.n_endpoints
     }
+
+    pub fn interface_number(&self) -> InterfaceNumber {
+        self.interface_number
+    }
 }
 
 impl Display for InterfaceDescriptor {
@@ -753,7 +843,7 @@ impl Display for InterfaceDescriptor {
         } = header;
         writeln!(f, "Descriptor Length: {length}")?;
         writeln!(f, "Descriptor type: {}", descriptor_type)?;
-        writeln!(f, "Interface number: {interface_number}")?;
+        writeln!(f, "Interface number: {interface_number:?}")?;
         writeln!(f, "Alternate setting: {alternate_setting}")?;
         writeln!(f, "Number of endpoints: {n_endpoints}")?;
         write!(f, "Descriptor Class: ")?;
@@ -839,6 +929,10 @@ impl ConfigurationDescriptor {
 
     pub fn n_interfaces(&self) -> u8 {
         self.n_interfaces
+    }
+
+    pub fn configuration_value(&self) -> ConfigurationValue {
+        self.configuration_value
     }
 }
 
@@ -939,6 +1033,65 @@ impl<'a> DescriptorIterator<'a> {
     }
 }
 
+impl From<u8> for ConfigurationValue {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ConfigurationValue> for u8 {
+    fn from(value: ConfigurationValue) -> Self {
+        value.0
+    }
+}
+
+impl EndpointDescriptor {
+    pub fn attributes(&self) -> &InterfaceAttributes {
+        &self.attributes
+    }
+
+    pub fn address(&self) -> &EndpointAddress {
+        &self.address
+    }
+
+    pub fn max_packet_size(&self) -> U16<zerocopy::LittleEndian> {
+        self.max_packet_size
+    }
+}
+
+impl From<u8> for InterfaceNumber {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<InterfaceNumber> for u8 {
+    fn from(value: InterfaceNumber) -> Self {
+        value.0
+    }
+}
+
+impl Request {
+    // TODO: move to BBB
+    pub const GET_MAX_LUN: Self = Self::_FEh;
+}
+
+impl From<u8> for EndpointNumber {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<EndpointNumber> for u8 {
+    fn from(value: EndpointNumber) -> Self {
+        value.0
+    }
+}
+
+impl EndpointNumber {
+    pub const CONTROL: Self = Self(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::DescriptorType;
@@ -948,5 +1101,11 @@ mod tests {
         for raw in 0..=u8::MAX {
             assert_eq!(u8::from(DescriptorType::from(raw)), raw);
         }
+    }
+}
+
+impl From<Feature> for u16 {
+    fn from(value: Feature) -> Self {
+        value as u16
     }
 }
