@@ -8,22 +8,24 @@ use crate::{
     usb::{
         ehci::{
             queue_head::{
-                self, BlankQueueHead, LogicalQueueHeadPointer, N_BLANK_QUEUE_HEADS, QueueHead,
-                QueueHeadIndex, QueueHeadPointer, QueueHeadPointerBit, RawQueueHead,
-                RawQueueHeadPointer,
+                self, BlankQueueHead, EndpointCharacteristicsBit::HeadOfReclamationListFlag,
+                HighBandwidthPipeMultiplier::OneTransactionPerMicroFrame, LogicalQueueHeadPointer,
+                N_BLANK_QUEUE_HEADS, QueueHead, QueueHeadIndex, QueueHeadPointer,
+                QueueHeadPointerBit, RawQueueHead, RawQueueHeadPointer,
             },
             transfer_descriptor::{
                 self, BlankQueueTransferDescriptor, BufferIndex, BufferIndexNoOffset, BufferPage,
                 BufferPointer, N_BLANK_BUFFER_PAGES, N_BLANK_QUEUE_TRANSFER_DESCRIPTORS, PacketId,
                 QueueTransferDescriptor, QueueTransferDescriptorIndex,
                 QueueTransferDescriptorPointer, QueueTransferDescriptorPointerBit,
+                QueueTransferDescriptorTokenBit::{Active, InterruptOnComplete},
             },
         },
-        setup::{Address, MaxPacketLength, SetupData},
+        setup::{Address, EndpointNumber, MaxPacketLength, SetupData},
     },
 };
 
-const MAX_QUEUE_HEADS: usize = 1;
+const MAX_QUEUE_HEADS: usize = 2;
 const MAX_QUEUE_TRANSFER_DESCRIPTORS: usize = 5;
 const MAX_BUFFER_PAGES: usize = 5;
 
@@ -262,30 +264,14 @@ impl StaticBundle {
         endpoint_speed: queue_head::EndpointSpeed,
         max_packet_length: Option<MaxPacketLength>,
     ) -> Result<(), error::ErrorWithTrace> {
-        use crate::usb::ehci::queue_head::EndpointCharacteristicsBit::HeadOfReclamationListFlag;
-        use crate::usb::ehci::queue_head::HighBandwidthPipeMultiplier::OneTransactionPerMicroFrame;
-        let qh = &mut self.queue_heads_mut()[0];
-        qh.clear_overlay_area();
-        let mut endpoint_characteristics = queue_head::EndpointCharacteristics::empty();
-        endpoint_characteristics.set_max_packet_length(
+        self.initialize_high_speed_queue_head(
+            0,
+            address,
+            EndpointNumber::CONTROL,
+            endpoint_speed,
             max_packet_length.unwrap_or(MaxPacketLength::DEFAULT_CONTROL_PIPE_MAX_PACKET_LENGTH),
-        );
-        endpoint_characteristics.set_flag(HeadOfReclamationListFlag);
-        endpoint_characteristics.set_endpoint_speed(endpoint_speed);
-        endpoint_characteristics.set_endpoint_number(0);
-        endpoint_characteristics.set_device_address(address);
-        qh.endpoint_characteristics_mut()
-            .set(endpoint_characteristics);
-        let mut endpoint_capabilities = queue_head::EndpointCapabilities::empty();
-        // Table 3-20 of the EHCI spec: for the default control pipe of a high-speed
-        // device (the only kind supported here), every field except the pipe multiplier
-        // must be zero, and the multiplier must be 1 (one transaction per micro-frame)
-        endpoint_capabilities.set_interrupt_schedule_mask(0);
-        endpoint_capabilities.set_split_completion_mask(0);
-        endpoint_capabilities.set_hub_address(0);
-        endpoint_capabilities.set_port_number(0);
-        endpoint_capabilities.set_high_bandwidth_pipe_multiplier(OneTransactionPerMicroFrame);
-        qh.endpoint_capabilities_mut().set(endpoint_capabilities);
+            true,
+        )?;
         // The head of the async reclamation list links to itself
         self.logically_link_queue_heads(QueueHeadIndex::from(0), Some(QueueHeadIndex::from(0)))?;
         self.logically_link_qtds(
@@ -349,6 +335,60 @@ impl StaticBundle {
         Ok(())
     }
 
+    pub fn initialize_high_speed_queue_head(
+        &mut self,
+        index: usize,
+        device_address: Address,
+        endpoint_number: EndpointNumber,
+        endpoint_speed: queue_head::EndpointSpeed,
+        max_packet_length: MaxPacketLength,
+        head_of_reclamation_list: bool,
+    ) -> Result<(), error::ErrorWithTrace> {
+        let qh = &mut self.queue_heads_mut()[index];
+        qh.clear_overlay_area();
+        let mut endpoint_characteristics = queue_head::EndpointCharacteristics::empty();
+        endpoint_characteristics.set_max_packet_length(max_packet_length);
+        if head_of_reclamation_list {
+            endpoint_characteristics.set_flag(HeadOfReclamationListFlag);
+        } else {
+            endpoint_characteristics.clear_flag(HeadOfReclamationListFlag);
+        }
+        endpoint_characteristics.set_endpoint_speed(endpoint_speed);
+        endpoint_characteristics.set_endpoint_number(endpoint_number);
+        endpoint_characteristics.set_device_address(device_address);
+        qh.endpoint_characteristics_mut()
+            .set(endpoint_characteristics);
+        qh.endpoint_capabilities_mut()
+            .update(|endpoint_capabilities| {
+                *endpoint_capabilities = queue_head::EndpointCapabilities::empty();
+                endpoint_capabilities.set_interrupt_schedule_mask(0);
+                endpoint_capabilities.set_split_completion_mask(0);
+                endpoint_capabilities.set_hub_address(0);
+                endpoint_capabilities.set_port_number(0);
+                endpoint_capabilities
+                    .set_high_bandwidth_pipe_multiplier(OneTransactionPerMicroFrame);
+            });
+        Ok(())
+    }
+
+    pub fn initialize_high_speed_queue_transfer_descriptor(
+        &mut self,
+        index: usize,
+        total_bytes_to_transfer: u16,
+        packet_id: PacketId,
+    ) -> Result<(), error::ErrorWithTrace> {
+        let td = &mut self.queue_transfer_descriptors_mut()[index];
+        let mut token: transfer_descriptor::QueueTransferDescriptorToken = Default::default();
+
+        token.set_total_bytes_to_transfer(total_bytes_to_transfer)?;
+        token.clear_flag(InterruptOnComplete);
+        token.set_current_page(0)?;
+        token.set_packet_id(packet_id);
+        token.set_flag(Active);
+        td.token_mut().set(token);
+        Ok(())
+    }
+
     pub fn queue_heads(&self) -> &ArrayVec<&'static mut queue_head::QueueHead, MAX_QUEUE_HEADS> {
         &self.queue_heads
     }
@@ -381,8 +421,11 @@ impl StaticBundle {
         (&raw const *self.queue_heads()[0]).cast()
     }
 
-    pub fn get_status(&self) -> transfer_descriptor::QueueTransferDescriptorToken {
-        let token = self.queue_heads[0].execution_cache_area();
+    pub fn get_status(
+        &self,
+        queue_head_index: usize,
+    ) -> transfer_descriptor::QueueTransferDescriptorToken {
+        let token = self.queue_heads[queue_head_index].execution_cache_area();
         token.read_with(|token| token.get_status())
     }
 
@@ -394,8 +437,8 @@ impl StaticBundle {
         &mut self.buffers
     }
 
-    pub fn first_qh_was_fetched(&self) -> bool {
-        !self.queue_heads()[0]
+    pub fn qh_was_fetched(&self, queue_head_index: usize) -> bool {
+        !self.queue_heads()[queue_head_index]
             .raw()
             .current_qtd_pointer()
             .read_with(|current_qtd_pointer| current_qtd_pointer.is_null())

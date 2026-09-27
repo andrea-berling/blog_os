@@ -13,7 +13,7 @@ use crate::{
     usb::{
         ehci::{
             alloc::StaticBundle,
-            control_transfer::{get_descriptor_bundle, set_address_bundle},
+            transfer::control::{get_descriptor_bundle, set_address_bundle},
             queue_head::{EndpointSpeed, RawQueueHead},
         },
         setup::{
@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub mod alloc;
-pub mod control_transfer;
+pub mod transfer;
 pub mod queue_head;
 pub mod transfer_descriptor;
 
@@ -210,13 +210,13 @@ impl Device {
             ))
             .with_context(Context::GettingConfigurationDescriptor(index));
 
-        let standard_parameters = control_transfer::StandardParameters {
+        let standard_parameters = transfer::control::StandardParameters {
             address: self.address,
             endpoint_speed: self.default_endpoint_speed,
             max_packet_length: Some(self.max_packet_size_endpoint_0.try_into()?),
         };
 
-        let get_descriptor_parameters = control_transfer::GetDescriptorParameters {
+        let get_descriptor_parameters = transfer::control::GetDescriptorParameters {
             descriptor_type: super::setup::DescriptorType::Configuration,
             descriptor_length: size_of::<ConfigurationDescriptor>() as u16,
             descriptor_alignment: align_of::<ConfigurationDescriptor>(),
@@ -228,7 +228,7 @@ impl Device {
             get_descriptor_bundle(standard_parameters, get_descriptor_parameters)?;
 
         error::try_with_trace!(
-            ehci_controller.run_control_transfer(&get_configuration_descriptor_bundle),
+            ehci_controller.run_transfer_sync(&get_configuration_descriptor_bundle),
             context: Context::GettingConfigurationDescriptor(index),
             facility: Facility::EhciDevice(self.controller_address(), self.address)
         );
@@ -252,14 +252,14 @@ impl Device {
 
         get_configuration_descriptor_bundle.initialize(
             standard_parameters,
-            control_transfer::GetDescriptorParameters {
+            transfer::control::GetDescriptorParameters {
                 descriptor_length: total_length,
                 ..get_descriptor_parameters
             },
         )?;
 
         error::try_with_trace!(
-            ehci_controller.run_control_transfer(&get_configuration_descriptor_bundle),
+            ehci_controller.run_transfer_sync(&get_configuration_descriptor_bundle),
             context: Context::GettingConfigurationDescriptor(index),
             facility: Facility::EhciDevice(self.controller_address(), self.address)
         );
@@ -657,14 +657,14 @@ impl Controller {
         let get_descriptor_error = Error::blank()
             .with_facility(facility)
             .with_context(Context::GettingDeviceDescriptor);
-        let set_address_bundle = set_address_bundle(control_transfer::StandardParameters {
+        let set_address_bundle = set_address_bundle(transfer::control::StandardParameters {
             address: new_address,
             endpoint_speed,
             max_packet_length: None,
         })?;
 
         error::try_with_trace!(
-            self.run_control_transfer(&set_address_bundle),
+            self.run_transfer_sync(&set_address_bundle),
             context: Context::SettingEHCIDeviceAddress,
             facility: facility
         );
@@ -680,12 +680,12 @@ impl Controller {
                 super::setup::LARGEST_LEGAL_MAX_PACKET_SIZE as usize,
             ) as u16;
         let mut get_device_descriptor_bundle = get_descriptor_bundle(
-            control_transfer::StandardParameters {
+            transfer::control::StandardParameters {
                 address: new_address,
                 endpoint_speed,
                 max_packet_length: Some(device_descriptor_prefix_length.try_into()?),
             },
-            control_transfer::GetDescriptorParameters {
+            transfer::control::GetDescriptorParameters {
                 descriptor_type: super::setup::DescriptorType::Device,
                 descriptor_length: device_descriptor_prefix_length,
                 descriptor_alignment: align_of::<DeviceDescriptor>(),
@@ -694,7 +694,7 @@ impl Controller {
             },
         )?;
         error::try_with_trace!(
-            self.run_control_transfer(&get_device_descriptor_bundle),
+            self.run_transfer_sync(&get_device_descriptor_bundle),
             context: Context::GettingDeviceDescriptor,
             facility: facility
         );
@@ -704,12 +704,12 @@ impl Controller {
             as u16;
 
         get_device_descriptor_bundle.initialize(
-            control_transfer::StandardParameters {
+            transfer::control::StandardParameters {
                 address: new_address,
                 endpoint_speed,
                 max_packet_length: Some(max_packet_size_endpoint_0.try_into()?),
             },
-            control_transfer::GetDescriptorParameters {
+            transfer::control::GetDescriptorParameters {
                 descriptor_type: super::setup::DescriptorType::Device,
                 descriptor_length: size_of::<DeviceDescriptor>() as u16,
                 descriptor_alignment: align_of::<DeviceDescriptor>(),
@@ -719,7 +719,7 @@ impl Controller {
         )?;
 
         error::try_with_trace!(
-            self.run_control_transfer(&get_device_descriptor_bundle),
+            self.run_transfer_sync(&get_device_descriptor_bundle),
             context: Context::GettingDeviceDescriptor,
             facility: facility
         );
@@ -752,25 +752,30 @@ impl Controller {
         &self.pci_config_addr
     }
 
-    pub fn run_control_transfer(&mut self, bundle: &StaticBundle) -> error::ResultWithTrace<()> {
+    pub fn run_transfer_sync(&mut self, bundle: &StaticBundle) -> error::ResultWithTrace<()> {
         self.enable_async_schedule()?;
         self.set_async_addr_list(bundle.first_queue_head_raw());
         self.run()?;
 
-        if let Err(err) = timer::bounded_wait!(bundle.first_qh_was_fetched() &&
-            !bundle.get_status().is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active)
-            , wait_for_ms: 2)
-        {
-            let _ = self.stop();
-            return Err(err.into());
-        }
+        for index in 0..bundle.queue_heads().len() {
+            if let Err(err) = timer::bounded_wait!(bundle.qh_was_fetched(index) &&
+                {
+                  let status = bundle.get_status(index);
+                  !status.is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Active) ||
+                  status.is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
+                }, wait_for_ms: 2)
+            {
+                let _ = self.stop();
+                return Err(err.into());
+            }
 
-        if bundle
-            .get_status()
-            .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
-        {
-            self.stop()?;
-            return Err(Fault::EHCITransferHalted.into());
+            if bundle
+                .get_status(index)
+                .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::Halted)
+            {
+                self.stop()?;
+                return Err(Fault::EHCITransferHalted.into());
+            }
         }
 
         self.stop()?;

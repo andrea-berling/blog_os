@@ -13,7 +13,7 @@ use crate::{
             QueueTransferDescriptorIndex, QueueTransferDescriptorPointer,
             QueueTransferDescriptorToken,
         },
-        setup::{Address, MaxPacketLength},
+        setup::{Address, EndpointNumber, MaxPacketLength},
     },
 };
 
@@ -138,8 +138,8 @@ impl EndpointCharacteristics {
         bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 8, return_ty: u8)
     }
 
-    pub fn set_endpoint_number(&mut self, endpoint_number: u8) {
-        bits::set_bits!(bits_expr: self.bits, value: endpoint_number, n_bits: 4, starts_at_bit: 8, bits_expr_ty: u32);
+    pub fn set_endpoint_number(&mut self, endpoint_number: EndpointNumber) {
+        bits::set_bits!(bits_expr: self.bits, value: u8::from(endpoint_number) as u32, n_bits: 4, starts_at_bit: 8, bits_expr_ty: u32);
     }
 
     pub fn get_device_address(&self) -> u8 {
