@@ -4,6 +4,7 @@ use num_enum::TryFromPrimitive;
 
 use crate::error;
 
+pub mod bbb;
 pub mod ehci;
 pub mod setup;
 

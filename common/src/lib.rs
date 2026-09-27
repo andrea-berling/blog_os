@@ -17,6 +17,7 @@ pub mod mmio;
 pub mod paging;
 pub mod pci;
 pub mod protection;
+pub mod scsi;
 pub mod serial;
 pub mod timer;
 pub mod tss;
