@@ -7,8 +7,8 @@
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
 use common::try_with_trace;
+use common::usb::setup::EndpointAddress;
 use common::{
-    array_vec::ArrayVec8,
     elf::program_header::ProgramHeaderEntryType,
     usb::{self},
 };
@@ -29,7 +29,7 @@ use common::{
     gdt::{self, SegmentDescriptor},
     idt,
     paging::{self},
-    pci, serial, tss, vga,
+    serial, tss, vga,
 };
 
 use crate::edd::DRIVE_PARAMETERS_BUFFER_SIZE;
@@ -513,6 +513,8 @@ fn load_kernel_from_boot_disk(
             ))
         }
         Err(_) => {
+            // NOTE: Load-bearing assumption: the bootloader was loaded from a USB stick connected to a hub
+            // controlled by an EHCI controller
             let (mut usb_controllers, mut usb_devices) = try_with_trace!(
                 usb::ehci::enumerate_usb_devices_on_pci_bus(),
                 fail_with: error.with_context(Context::EnumeratingUSBDevices)
@@ -522,6 +524,85 @@ fn load_kernel_from_boot_disk(
                 usb::ehci::find_usb_mass_storage_devices(&usb_devices, &mut usb_controllers),
                 fail_with: error.with_context(Context::LookingForUSBMassStorageDevices)
             );
+
+            for usb_mass_storage_device in &usb_mass_storage_devices {
+                let usb::Class::MassStorage(
+                    usb::MassStorageSubclass::SCSITransparentCommandSet,
+                    usb::MassStorageProtocol::Bbb,
+                ) = usb_mass_storage_device.class()
+                else {
+                    serial::log::debug_no_sync!(
+                        "Unsupported Mass Storage device: {:?}. Skipping",
+                        usb_mass_storage_device.class()
+                    );
+                    continue;
+                };
+
+                let Some((usb_device, corresponding_controller)) = usb_mass_storage_device
+                    .find_corresponding_device_and_controller_mut(
+                        &mut usb_devices,
+                        &mut usb_controllers,
+                    )
+                else {
+                    continue;
+                };
+
+                let Ok(..) = usb_device
+                    .set_configuration(
+                        usb_mass_storage_device.configuration_value(),
+                        corresponding_controller,
+                    )
+                    .inspect_err(|err| {
+                        serial::log::debug_no_sync!("Error: {err:#}");
+                    })
+                else {
+                    continue;
+                };
+                let max_lun = match usb_device.get_max_lun(
+                    usb_mass_storage_device.interface_number(),
+                    corresponding_controller,
+                ) {
+                    Ok(max_lun) => max_lun,
+                    Err(err) if matches!(err.fault(), Fault::EHCITransferHalted) => {
+                        // Single LUN device, request stalled, we just clear the Halt feature and
+                        // proceed
+                        usb_device.clear_feature(
+                            usb::setup::Feature::EndpointHalt,
+                            usb::ehci::transfer::control::FeatureRecipient::Endpoint(
+                                EndpointAddress::CONTROL,
+                            ),
+                            corresponding_controller,
+                        )?;
+                        0.into()
+                    }
+                    Err(err) => {
+                        // Unrecoverable error, we skip the device
+                        serial::log::debug_no_sync!("Error: {err:#}");
+                        continue;
+                    }
+                };
+
+                let mut scsi_tag: usb::bbb::CommandWrapperTag = 0.into();
+
+                scsi_tag.increment();
+
+                let Ok(inquiry_data) = usb_device
+                    .scsi_inquiry(
+                        max_lun,
+                        scsi_tag,
+                        *usb_mass_storage_device.bulk_in(),
+                        *usb_mass_storage_device.bulk_out(),
+                        corresponding_controller,
+                    )
+                    .inspect_err(|err| {
+                        serial::log::debug_no_sync!("Error: {err:#}");
+                    })
+                else {
+                    continue;
+                };
+
+                serial::log::debug_no_sync!("Inquiry data:\n{inquiry_data}");
+            }
 
             todo!("let's have some fun")
         }
