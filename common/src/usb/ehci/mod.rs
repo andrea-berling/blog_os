@@ -9,23 +9,27 @@ use crate::{
     make_bitmap,
     mmio::{self, Maskable},
     pci::ConfigAddressRegister,
+    scsi::LogicalUnitNumber,
     timer::{self, LowPrecisionTimer},
     usb::{
         ehci::{
             alloc::StaticBundle,
-            transfer::control::{get_descriptor_bundle, set_address_bundle},
             queue_head::{EndpointSpeed, RawQueueHead},
+            transfer::control::{
+                FeatureRecipient, get_descriptor_bundle, get_max_lun_bundle, set_address_bundle,
+                set_configuration_bundle,
+            },
         },
         setup::{
-            Address, ConfigurationDescriptor, Descriptor, DeviceDescriptor, EndpointDescriptor,
-            InterfaceDescriptor,
+            Address, ConfigurationDescriptor, ConfigurationValue, Descriptor, DeviceDescriptor,
+            EndpointDescriptor, Feature, InterfaceDescriptor, InterfaceNumber, MaxPacketLength,
         },
     },
 };
 
 pub mod alloc;
-pub mod transfer;
 pub mod queue_head;
+pub mod transfer;
 pub mod transfer_descriptor;
 
 // Source of truth: EHCI specification 1.0
@@ -185,7 +189,8 @@ pub struct Device {
     address: Address,
     default_endpoint_speed: EndpointSpeed,
     descriptor: DeviceDescriptor,
-    max_packet_size_endpoint_0: u16,
+    configuration_value: Option<ConfigurationValue>,
+    max_packet_size_endpoint_0: MaxPacketLength,
 }
 
 impl Device {
@@ -213,7 +218,7 @@ impl Device {
         let standard_parameters = transfer::control::StandardParameters {
             address: self.address,
             endpoint_speed: self.default_endpoint_speed,
-            max_packet_length: Some(self.max_packet_size_endpoint_0.try_into()?),
+            max_packet_length: Some(self.max_packet_size_endpoint_0),
         };
 
         let get_descriptor_parameters = transfer::control::GetDescriptorParameters {
@@ -307,8 +312,91 @@ impl Device {
 
         Ok(interface_descriptors)
     }
-}
+    pub fn set_configuration(
+        &mut self,
+        configuration_value: ConfigurationValue,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<()> {
+        let standard_parameters = transfer::control::StandardParameters {
+            address: self.address,
+            endpoint_speed: self.default_endpoint_speed,
+            max_packet_length: Some(self.max_packet_size_endpoint_0),
+        };
 
+        let set_configuration_bundle =
+            set_configuration_bundle(standard_parameters, configuration_value)?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&set_configuration_bundle),
+            context: Context::SettingConfigurationValue(configuration_value.into()),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        self.configuration_value = Some(configuration_value);
+
+        Ok(())
+    }
+
+    pub fn get_max_lun(
+        &mut self,
+        interface_number: InterfaceNumber,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<LogicalUnitNumber> {
+        let standard_parameters = transfer::control::StandardParameters {
+            address: self.address,
+            endpoint_speed: self.default_endpoint_speed,
+            max_packet_length: Some(self.max_packet_size_endpoint_0),
+        };
+
+        let get_max_lun_bundle = get_max_lun_bundle(standard_parameters, interface_number)?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&get_max_lun_bundle),
+            context: Context::GettingMaxLUN(interface_number.into()),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        Ok(get_max_lun_bundle.get_max_lun().into())
+    }
+
+    pub fn clear_feature(
+        &mut self,
+        feature: Feature,
+        feature_recipient: FeatureRecipient,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<()> {
+        let standard_parameters = transfer::control::StandardParameters {
+            address: self.address,
+            endpoint_speed: self.default_endpoint_speed,
+            max_packet_length: Some(self.max_packet_size_endpoint_0),
+        };
+
+        let get_max_lun_bundle =
+            transfer::control::clear_feature(standard_parameters, feature, feature_recipient)?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&get_max_lun_bundle),
+            context: Context::ClearingFeature,
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        Ok(())
+    }
+
+    pub fn address(&self) -> Address {
+        self.address
+    }
+
+    pub fn find_corresponding_controller_mut<'a>(
+        &self,
+        controllers: &'a mut [Controller],
+    ) -> Option<&'a mut Controller> {
+        controllers.iter_mut().find(|controller| {
+            error::PciDevice::from(controller.pci_config_addr().clone())
+                == self.controller_address()
+        })
+    }
+}
 impl HostControllerStructuralParameters {
     pub fn n_ports(&self) -> u8 {
         bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 0, return_ty: u8)
@@ -699,15 +787,18 @@ impl Controller {
             facility: facility
         );
 
-        let max_packet_size_endpoint_0 = get_device_descriptor_bundle.get_descriptor_buffer()
-            [DeviceDescriptor::max_packet_size_endpoint_0_offset()]
-            as u16;
+        let max_packet_size_endpoint_0: MaxPacketLength = error::try_with_trace!(
+           (get_device_descriptor_bundle.get_descriptor_buffer()
+           [DeviceDescriptor::max_packet_size_endpoint_0_offset()] as u16).try_into(),
+            context: Context::GettingDeviceDescriptor,
+            facility: facility
+        );
 
         get_device_descriptor_bundle.initialize(
             transfer::control::StandardParameters {
                 address: new_address,
                 endpoint_speed,
-                max_packet_length: Some(max_packet_size_endpoint_0.try_into()?),
+                max_packet_length: Some(max_packet_size_endpoint_0),
             },
             transfer::control::GetDescriptorParameters {
                 descriptor_type: super::setup::DescriptorType::Device,
@@ -745,6 +836,7 @@ impl Controller {
             default_endpoint_speed: endpoint_speed,
             descriptor,
             max_packet_size_endpoint_0,
+            configuration_value: None,
         })
     }
 

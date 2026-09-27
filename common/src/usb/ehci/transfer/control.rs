@@ -13,8 +13,9 @@ use crate::{
             },
         },
         setup::{
-            Address, ConfigurationDescriptor, Descriptor, DescriptorType, DeviceDescriptor,
-            LanguageId, MaxPacketLength, SetupData,
+            Address, ConfigurationDescriptor, ConfigurationValue, Descriptor, DescriptorType,
+            DeviceDescriptor, EndpointAddress, Feature, InterfaceNumber, LanguageId,
+            MaxPacketLength, SetupData,
         },
     },
 };
@@ -33,6 +34,8 @@ pub struct GetDescriptorStaticBundle {
     descriptor_alignment: usize,
 }
 
+pub struct GetMaxLunStaticBundle(StaticBundle);
+
 #[derive(Clone, Copy)]
 pub struct GetDescriptorParameters {
     pub descriptor_type: DescriptorType,
@@ -40,6 +43,10 @@ pub struct GetDescriptorParameters {
     pub descriptor_alignment: usize,
     pub descriptor_index: u8,
     pub lang_id: Option<LanguageId>,
+}
+
+pub enum FeatureRecipient {
+    Endpoint(EndpointAddress),
 }
 
 impl GetDescriptorStaticBundle {
@@ -133,6 +140,12 @@ impl GetDescriptorStaticBundle {
     }
 }
 
+impl GetMaxLunStaticBundle {
+    pub fn get_max_lun(&self) -> u8 {
+        self.buffers()[0][size_of::<SetupData>().next_multiple_of(1)]
+    }
+}
+
 impl core::ops::Deref for GetDescriptorStaticBundle {
     type Target = StaticBundle;
 
@@ -144,6 +157,20 @@ impl core::ops::Deref for GetDescriptorStaticBundle {
 impl core::ops::DerefMut for GetDescriptorStaticBundle {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.bundle
+    }
+}
+
+impl core::ops::Deref for GetMaxLunStaticBundle {
+    type Target = StaticBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for GetMaxLunStaticBundle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -192,4 +219,100 @@ pub fn get_descriptor_bundle(
     };
     result.initialize(standard_parameters, get_descriptor_parameters)?;
     Ok(result)
+}
+
+pub fn set_configuration_bundle(
+    StandardParameters {
+        address,
+        endpoint_speed,
+        max_packet_length,
+    }: StandardParameters,
+    configuration_value: ConfigurationValue,
+) -> error::ResultWithTrace<StaticBundle> {
+    let mut bundle = allocate_static_bundle(AllocationRequest {
+        n_queue_heads: 1,
+        n_queue_transfer_descriptors: 2,
+        n_buffers: 1,
+    })?;
+
+    bundle.initialize_control_queue_head(address, endpoint_speed, max_packet_length)?;
+    bundle.initialize_setup_queue_transfer_descriptor(SetupData::set_configuration(
+        configuration_value,
+    ))?;
+    bundle.handshake_last_queue_transfer_descriptor(PacketId::In)?;
+    bundle.link_things_up()?;
+
+    Ok(bundle)
+}
+
+pub fn get_max_lun_bundle(
+    StandardParameters {
+        address,
+        endpoint_speed,
+        max_packet_length,
+    }: StandardParameters,
+    interface_number: InterfaceNumber,
+) -> error::ResultWithTrace<GetMaxLunStaticBundle> {
+    let mut bundle = allocate_static_bundle(AllocationRequest {
+        n_queue_heads: 1,
+        n_queue_transfer_descriptors: 3,
+        n_buffers: 1,
+    })?;
+
+    use crate::usb::ehci::transfer_descriptor::PacketId::*;
+    use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::Active;
+    use crate::usb::ehci::transfer_descriptor::QueueTransferDescriptorTokenBit::InterruptOnComplete;
+    bundle.initialize_control_queue_head(address, endpoint_speed, max_packet_length)?;
+    bundle.initialize_setup_queue_transfer_descriptor(SetupData::get_max_lun(interface_number))?;
+
+    bundle.logically_link_qtds(
+        QtdLinkSource::QueueTransferDescriptor(QueueTransferDescriptorIndex::from(1)),
+        QtdLink::Next,
+        Some(QueueTransferDescriptorIndex::from(2)),
+    )?;
+
+    let td2 = &mut bundle.queue_transfer_descriptors_mut()[1];
+    let mut token: QueueTransferDescriptorToken = Default::default();
+    token.set_total_bytes_to_transfer(1)?;
+    token.clear_flag(InterruptOnComplete);
+    token.set_packet_id(In);
+    token.set_flag(Active);
+    td2.token_mut().set(token);
+    td2.buffer_pointers_mut()[0] = Some(BufferIndex::new(
+        0,
+        size_of::<SetupData>().next_multiple_of(1),
+    )?);
+
+    bundle.handshake_last_queue_transfer_descriptor(PacketId::Out)?;
+    bundle.link_things_up()?;
+
+    Ok(GetMaxLunStaticBundle(bundle))
+}
+
+pub fn clear_feature(
+    StandardParameters {
+        address,
+        endpoint_speed,
+        max_packet_length,
+    }: StandardParameters,
+    feature: Feature,
+    feature_recipient: FeatureRecipient,
+) -> error::ResultWithTrace<StaticBundle> {
+    let mut bundle = allocate_static_bundle(AllocationRequest {
+        n_queue_heads: 1,
+        n_queue_transfer_descriptors: 2,
+        n_buffers: 1,
+    })?;
+
+    bundle.initialize_control_queue_head(address, endpoint_speed, max_packet_length)?;
+    bundle.initialize_setup_queue_transfer_descriptor(match feature_recipient {
+        FeatureRecipient::Endpoint(endpoint_address) => {
+            SetupData::clear_endpoint_feature(endpoint_address, feature)
+        }
+    })?;
+
+    bundle.handshake_last_queue_transfer_descriptor(PacketId::In)?;
+    bundle.link_things_up()?;
+
+    Ok(bundle)
 }
