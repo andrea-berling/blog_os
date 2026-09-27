@@ -3,13 +3,14 @@ use core::fmt::Display;
 use num_enum::TryFromPrimitive;
 
 use crate::{
-    array_vec::ArrayVec8,
+    array_vec::{ArrayVec, ArrayVec8},
     bits::{self},
     error::{self, Context, Error, Facility, Fault, PciDevice},
     make_bitmap,
     mmio::{self, Maskable},
-    pci::ConfigAddressRegister,
+    pci::{self, ConfigAddressRegister},
     scsi::{self, LogicalUnitNumber},
+    serial,
     timer::{self, LowPrecisionTimer},
     try_with_trace,
     usb::{
@@ -209,8 +210,10 @@ impl Device {
         &self,
         index: u8,
         ehci_controller: &mut Controller,
-    ) -> error::ResultWithTrace<ArrayVec8<(InterfaceDescriptor, ArrayVec8<EndpointDescriptor>)>>
-    {
+    ) -> error::ResultWithTrace<(
+        ConfigurationDescriptor,
+        ArrayVec8<(InterfaceDescriptor, ArrayVec8<EndpointDescriptor>)>,
+    )> {
         let get_descriptor_error = Error::blank()
             .with_facility(Facility::EhciDevice(
                 self.controller_address(),
@@ -313,7 +316,7 @@ impl Device {
                 .into());
         }
 
-        Ok(interface_descriptors)
+        Ok((configuration_descriptor, interface_descriptors))
     }
 
     pub fn set_configuration(
@@ -1152,4 +1155,137 @@ impl Iterator for PortsIterator {
             None
         }
     }
+}
+
+pub fn enumerate_usb_devices_on_pci_bus() -> error::ResultWithTrace<(
+    ArrayVec8<usb::ehci::Controller>,
+    ArrayVec8<usb::ehci::Device>,
+)> {
+    let mut controllers: ArrayVec8<usb::ehci::Controller> = ArrayVec8::new();
+    let mut devices: ArrayVec8<usb::ehci::Device> = ArrayVec8::new();
+    for controller_result in pci::EHCIControllers::new() {
+        let mut usb_host_controller = match controller_result {
+            Ok(controller) => controller,
+            Err(error) => {
+                serial::log::debug_no_sync!("Warning: skipping EHCI controller: {error}");
+                continue;
+            }
+        };
+        let mut next_address = 1;
+        if usb_host_controller
+            .owner()
+            .is_none_or(|owner| matches!(owner, usb::ehci::Owner::Bios))
+            && let Err(error) = usb_host_controller.switch_ownership(usb::ehci::Owner::Os)
+        {
+            serial::log::debug_no_sync!("Warning: Controller failed to switch ownership:\n{error}");
+        }
+        let Ok(..) = usb_host_controller.reset().inspect_err(|err| {
+            serial::log::debug_no_sync!("Warning: skipping EHCI controller: {err:#}")
+        }) else {
+            continue;
+        };
+        for (i, mut port) in usb_host_controller.ports().into_iter().enumerate() {
+            if port.read_with(|port| {
+                port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::PortPowerControlSwitchIsOn)
+                    && port.needs_reset()
+            }) {
+                serial::log::debug_no_sync!("Port {i} needs reset");
+                let _ = usb_host_controller
+                    .reset_port(&mut port)
+                    .inspect_err(|err| {
+                        serial::log::debug_no_sync!("Warning: Port reset failed: {err}");
+                    });
+            }
+            if port.read_with(|port| {
+                port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::DevicePresent)
+                    && port.is_set(usb::ehci::PortStatusAndControlRegisterFlag::Enabled)
+            }) {
+                serial::log::debug_no_sync!("Port {i} has device present and enabled");
+                serial::log::debug_no_sync!("Port number: {}", port.index());
+                serial::log::debug_no_sync!(
+                    "Port Status and Control:\n{}",
+                    port.portsc().clone_read()
+                );
+                let new_device = usb_host_controller
+                    .initialize_device(next_address.try_into()?, EndpointSpeed::HighSpeed)?;
+                serial::log::debug_no_sync!("New Device:\n{new_device}");
+                devices.try_push(new_device)?;
+                next_address += 1;
+            }
+        }
+        controllers.try_push(usb_host_controller)?;
+    }
+    Ok((controllers, devices))
+}
+
+pub fn find_usb_mass_storage_devices(
+    usb_devices: &[usb::ehci::Device],
+    usb_controllers: &mut [usb::ehci::Controller],
+) -> error::ResultWithTrace<ArrayVec8<usb::mass_storage::Device>> {
+    let mut usb_mass_storage_devices = ArrayVec::new();
+    'usb_devices_loop: for usb_device in usb_devices {
+        let warn_and_skip = |msg: &str| {
+            serial::log::debug_no_sync!(
+                "Warning: {msg}. Skipping device {}",
+                usb_device.controller_address()
+            );
+        };
+        serial::log::debug_no_sync!("Trying device {}", usb_device.controller_address());
+        let Some(corresponding_controller) =
+            usb_device.find_corresponding_controller_mut(usb_controllers)
+        else {
+            warn_and_skip("no corresponding controller");
+            continue;
+        };
+
+        match usb_device.descriptor().get_class_type() {
+            Some(usb::DeviceClassType::UseInterfaceDescriptors) => {
+                for configuration_index in 0..usb_device.descriptor().n_configurations() {
+                    let Ok((configuration_descriptor, mut interface_descriptors)) = usb_device
+                        .get_configuration_descriptor_full(
+                            configuration_index,
+                            corresponding_controller,
+                        )
+                    else {
+                        warn_and_skip("couldn't get full configuration descriptor");
+                        continue 'usb_devices_loop;
+                    };
+                    while let Some((interface_descriptor, endpoint_descriptors)) =
+                        interface_descriptors.pop()
+                    {
+                        let Some(class @ usb::Class::MassStorage(..)) =
+                            interface_descriptor.get_class()
+                        else {
+                            continue;
+                        };
+                        let Ok(usb_mass_storage_device) = usb::mass_storage::Device::new(
+                            usb_device.controller_address(),
+                            usb_device.address(),
+                            configuration_descriptor.configuration_value(),
+                            class,
+                            interface_descriptor,
+                            endpoint_descriptors,
+                        )
+                        .inspect_err(|err| serial::log::debug_no_sync!("Error: {err:#}")) else {
+                            continue;
+                        };
+                        try_with_trace!(
+                            usb_mass_storage_devices.try_push(usb_mass_storage_device),
+                            context: Context::LookingForUSBMassStorageDevices,
+                            facility: Facility::Bootloader
+                        );
+                    }
+                }
+            }
+            Some(_) => {
+                warn_and_skip("unexpected device class code (expected 0x00)");
+                continue;
+            }
+            None => {
+                warn_and_skip("invalid class returned");
+                continue;
+            }
+        }
+    }
+    Ok(usb_mass_storage_devices)
 }
