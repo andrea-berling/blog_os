@@ -9,7 +9,10 @@ use core::{
 use thiserror::Error;
 use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
-use crate::{array_vec::ArrayVec, usb::setup::Address};
+use crate::{
+    array_vec::ArrayVec,
+    usb::setup::{Address, ConfigurationValue, InterfaceNumber},
+};
 
 #[derive(Clone, Copy)]
 pub struct Prelude<const N: usize>([u8; N]);
@@ -52,6 +55,8 @@ pub enum Context {
     GettingDeviceDescriptor,
     #[error("Getting configuration descriptor {0}")]
     GettingConfigurationDescriptor(u8),
+    #[error("Setting configuration value {0}")]
+    SettingConfigurationValue(u8),
     #[error("Reading descriptor")]
     ReadingDescriptor,
     #[error("Parsing interface descriptor")]
@@ -62,6 +67,18 @@ pub enum Context {
     StartingEHCIScheduleExecution,
     #[error("Stopping EHCI Schedule Execution")]
     StoppingEHCIScheduleExecution,
+    #[error("Looking for USB Mass Storage devices")]
+    LookingForUSBMassStorageDevices,
+    #[error("Getting max LUN (interface {0})")]
+    GettingMaxLUN(u8),
+    #[error("Clearing feature")]
+    ClearingFeature,
+    #[error("SCSI inquiry on {0}")]
+    ScsiInquiry(u8),
+    #[error("Enumerating USB Devices")]
+    EnumeratingUSBDevices,
+    #[error("Building USB Mass Storage devices")]
+    BuildingUSBMassStorageDevice,
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -203,6 +220,26 @@ pub enum Fault {
     CorruptELFSectionHeaderEntry(u32),
     #[error("Corrupt ELF program header entry: stored segment type 0x{0:08x} is invalid")]
     CorruptELFProgramHeaderEntry(u32),
+    #[error("Invalid CSW status byte: {0:#x}")]
+    InvalidCSWByte(u8),
+    #[error("BBB command failed")]
+    BBBCommandFailed,
+    #[error("BBB phase error")]
+    BBBPhaseError,
+    #[error("Invalid CSW signature")]
+    InvalidCSWSignature,
+    #[error("CSW tag doesn't match")]
+    CSWTagDoesntMatch,
+    #[error("Non-zero CSW data residue: {0}")]
+    CSWNonZeroDataResidue(u32),
+    #[error("No Bulk In endpoint")]
+    NoBulkInEndpoint,
+    #[error("No Bulk Out endpoint")]
+    NoBulkOutEndpoint,
+    #[error("Invalid command block length: {0}")]
+    InvalidCommandBlockLength(u8),
+    #[error("Invalid logical unit number: {0}")]
+    InvalidLogicalUnitNumber(u8),
 }
 
 #[derive(Debug, Error, Clone, Copy)]
@@ -211,6 +248,7 @@ pub enum Feature {
     _1GBPages,
 }
 
+// TODO: get rid of this and use the type in pci
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PciDevice {
     bus_number: u8,
@@ -264,6 +302,16 @@ pub enum Facility {
     // USB
     #[error("EHCI device {1} (EHCI controller: {0})")]
     EhciDevice(PciDevice, Address),
+
+    #[error(
+        "EHCI device {address}, {configuration_value:?}, {interface_number:?} (EHCI controller: {pci_device})"
+    )]
+    EhciFunction {
+        pci_device: PciDevice,
+        address: Address,
+        configuration_value: ConfigurationValue,
+        interface_number: InterfaceNumber,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -327,6 +375,14 @@ impl Error {
 
     pub fn fault(&self) -> Fault {
         self.fault
+    }
+
+    pub fn context(&self) -> Context {
+        self.context
+    }
+
+    pub fn facility(&self) -> Facility {
+        self.facility
     }
 }
 
