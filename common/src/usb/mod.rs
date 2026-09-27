@@ -6,6 +6,7 @@ use crate::error;
 
 pub mod bbb;
 pub mod ehci;
+pub mod mass_storage;
 pub mod setup;
 
 #[derive(TryFromPrimitive)]
