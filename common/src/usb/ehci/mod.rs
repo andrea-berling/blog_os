@@ -9,9 +9,12 @@ use crate::{
     make_bitmap,
     mmio::{self, Maskable},
     pci::ConfigAddressRegister,
-    scsi::LogicalUnitNumber,
+    scsi::{self, LogicalUnitNumber},
     timer::{self, LowPrecisionTimer},
+    try_with_trace,
     usb::{
+        self,
+        bbb::CommandWrapperTag,
         ehci::{
             alloc::StaticBundle,
             queue_head::{EndpointSpeed, RawQueueHead},
@@ -312,6 +315,7 @@ impl Device {
 
         Ok(interface_descriptors)
     }
+
     pub fn set_configuration(
         &mut self,
         configuration_value: ConfigurationValue,
@@ -383,6 +387,47 @@ impl Device {
         Ok(())
     }
 
+    pub fn scsi_inquiry(
+        &self,
+        logical_unit_number: LogicalUnitNumber,
+        tag: CommandWrapperTag,
+        bulk_in: crate::usb::mass_storage::EndpointDescriptor,
+        bulk_out: crate::usb::mass_storage::EndpointDescriptor,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<scsi::cdb::data::Inquiry> {
+        let scsi_inquiry_bundle = usb::ehci::transfer::scsi::inquiry_bundle(
+            self.address,
+            self.default_endpoint_speed,
+            logical_unit_number,
+            tag,
+            bulk_in,
+            bulk_out,
+        )?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&scsi_inquiry_bundle),
+            context: Context::ScsiInquiry(logical_unit_number.into()),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        let csw = scsi_inquiry_bundle.get_command_status_wrapper()?;
+
+        let error = Error::blank()
+            .with_context(Context::ScsiInquiry(logical_unit_number.into()))
+            .with_facility(Facility::EhciDevice(
+                self.controller_address(),
+                self.address,
+            ));
+
+        try_with_trace!(csw.validate(tag), context: error.context(), facility: error.facility());
+
+        scsi_inquiry_bundle.get_inquiry_data().map_err(|err| {
+            err.with_context(error.context())
+                .with_facility(error.facility())
+                .into()
+        })
+    }
+
     pub fn address(&self) -> Address {
         self.address
     }
@@ -397,6 +442,7 @@ impl Device {
         })
     }
 }
+
 impl HostControllerStructuralParameters {
     pub fn n_ports(&self) -> u8 {
         bits::get_bits!(bits_expr: self.bits, n_bits: 4, starts_at_bit: 0, return_ty: u8)
