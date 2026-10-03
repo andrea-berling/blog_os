@@ -207,6 +207,10 @@ impl Device {
         &self.descriptor
     }
 
+    pub fn address(&self) -> Address {
+        self.address
+    }
+
     pub fn get_configuration_descriptor_full(
         &self,
         index: u8,
@@ -506,10 +510,6 @@ impl Device {
             ehci_controller,
             Context::ScsiReadCapacity(logical_unit_number.into()),
         )
-    }
-
-    pub fn address(&self) -> Address {
-        self.address
     }
 
     pub fn find_corresponding_controller_mut<'a>(
