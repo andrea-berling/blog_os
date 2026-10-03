@@ -1,4 +1,4 @@
-use zerocopy::TryFromBytes as _;
+use core::marker::PhantomData;
 
 use crate::{
     error::{self, convert_try_read_error},
@@ -15,21 +15,40 @@ use crate::{
     },
 };
 
-pub struct InquiryStaticBundle {
+pub struct StaticBundleWithData<T: zerocopy::TryFromBytes> {
     bundle: usb::ehci::bbb::CommandBundle,
-    inquiry_data_offset: usize,
+    data_offset: usize,
+    data: PhantomData<T>,
 }
 
-impl InquiryStaticBundle {
-    pub fn get_inquiry_data(&self) -> error::Result<scsi::cdb::data::Inquiry> {
-        let bytes = &self.buffers()[0][self.inquiry_data_offset..];
-        scsi::cdb::data::Inquiry::try_read_from_prefix(bytes)
+pub trait BundleWithData {
+    type Data;
+
+    fn get_data(&self) -> error::Result<Self::Data>;
+}
+
+impl<T: zerocopy::TryFromBytes> StaticBundleWithData<T> {
+    pub fn new(bundle: usb::ehci::bbb::CommandBundle, data_offset: usize) -> Self {
+        Self {
+            bundle,
+            data_offset,
+            data: PhantomData,
+        }
+    }
+}
+
+impl<T: zerocopy::TryFromBytes> BundleWithData for StaticBundleWithData<T> {
+    type Data = T;
+
+    fn get_data(&self) -> error::Result<Self::Data> {
+        let bytes = &self.buffers()[0][self.data_offset..];
+        T::try_read_from_prefix(bytes)
             .map(|(data, _)| data)
             .map_err(convert_try_read_error)
     }
 }
 
-impl core::ops::Deref for InquiryStaticBundle {
+impl<T: zerocopy::TryFromBytes> core::ops::Deref for StaticBundleWithData<T> {
     type Target = usb::ehci::bbb::CommandBundle;
 
     fn deref(&self) -> &Self::Target {
@@ -37,7 +56,7 @@ impl core::ops::Deref for InquiryStaticBundle {
     }
 }
 
-impl core::ops::DerefMut for InquiryStaticBundle {
+impl<T: zerocopy::TryFromBytes> core::ops::DerefMut for StaticBundleWithData<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.bundle
     }
@@ -50,7 +69,7 @@ pub fn inquiry_bundle(
     tag: CommandWrapperTag,
     bulk_in: crate::usb::mass_storage::EndpointDescriptor,
     bulk_out: crate::usb::mass_storage::EndpointDescriptor,
-) -> error::ResultWithTrace<InquiryStaticBundle> {
+) -> error::ResultWithTrace<StaticBundleWithData<scsi::cdb::data::Inquiry>> {
     let inquiry_command = scsi::cdb::command::Inquiry::new(logical_unit_number);
 
     let mut bundle = usb::ehci::bbb::allocate_bundle(
@@ -99,10 +118,7 @@ pub fn inquiry_bundle(
 
     bundle.link_things_up()?;
 
-    Ok(InquiryStaticBundle {
-        bundle,
-        inquiry_data_offset,
-    })
+    Ok(StaticBundleWithData::new(bundle, inquiry_data_offset))
 }
 
 pub fn test_unit_ready_bundle(
@@ -138,4 +154,67 @@ pub fn test_unit_ready_bundle(
     bundle.link_things_up()?;
 
     Ok(bundle)
+}
+
+pub fn read_capacity_bundle(
+    address: Address,
+    endpoint_speed: EndpointSpeed,
+    logical_unit_number: LogicalUnitNumber,
+    tag: CommandWrapperTag,
+    bulk_in: crate::usb::mass_storage::EndpointDescriptor,
+    bulk_out: crate::usb::mass_storage::EndpointDescriptor,
+) -> error::ResultWithTrace<StaticBundleWithData<scsi::cdb::data::ReadCapacity>> {
+    type CommandType = scsi::cdb::command::ReadCapacity;
+    type DataType = scsi::cdb::data::ReadCapacity;
+    let command = CommandType::new(logical_unit_number);
+
+    let mut bundle = usb::ehci::bbb::allocate_bundle(
+        &usb::ehci::bbb::CommandAllocationRequest {
+            address,
+            endpoint_speed,
+            logical_unit_number,
+            tag,
+            bulk_in,
+            bulk_out,
+            n_additional_queue_heads: 0,
+            n_additional_qtds: 1,
+            n_additional_buffers: 0,
+            // The bootability specification pads every CDB to 12 bytes and requires devices
+            // to accept a bCBWCBLength of 12 (sections 1.3.3 and 2).
+            payload_length: (size_of::<CommandType>() as u8).try_into()?,
+            direction: usb::bbb::Direction::DeviceToHost,
+            data_transfer_length: size_of::<DataType>() as u32,
+        },
+        command.try_into()?,
+    )?;
+
+    bundle.logically_chain_queue_heads()?;
+
+    bundle.initialize_high_speed_queue_transfer_descriptor(
+        1,
+        size_of::<DataType>() as u16,
+        PacketId::In,
+    )?;
+
+    let data_offset = bundle
+        .first_free_byte_in_first_buffer
+        .next_multiple_of(align_of::<DataType>());
+
+    bundle.queue_transfer_descriptors_mut()[1].buffer_pointers_mut()[0] =
+        Some(BufferIndex::new(0, data_offset)?);
+
+    bundle.logically_link_qtds(
+        QtdLinkSource::QueueHead(QueueHeadIndex::from(1)),
+        QtdLink::Next,
+        Some(QueueTransferDescriptorIndex::from(1)),
+    )?;
+    bundle.logically_link_qtds(
+        QtdLinkSource::QueueTransferDescriptor(QueueTransferDescriptorIndex::from(1)),
+        QtdLink::Next,
+        Some(QueueTransferDescriptorIndex::from(2)),
+    )?;
+
+    bundle.link_things_up()?;
+
+    Ok(StaticBundleWithData::new(bundle, data_offset))
 }

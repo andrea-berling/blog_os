@@ -391,6 +391,39 @@ impl Device {
         Ok(())
     }
 
+    fn run_scsi_request<
+        B: transfer::scsi::BundleWithData + core::ops::Deref<Target = bbb::CommandBundle>,
+    >(
+        &self,
+        bundle: B,
+        tag: CommandWrapperTag,
+        ehci_controller: &mut Controller,
+        context: Context,
+    ) -> error::ResultWithTrace<B::Data> {
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&bundle),
+            context: context,
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        let csw = bundle.get_command_status_wrapper()?;
+
+        let error = Error::blank()
+            .with_context(context)
+            .with_facility(Facility::EhciDevice(
+                self.controller_address(),
+                self.address,
+            ));
+
+        try_with_trace!(csw.validate(tag), context: error.context(), facility: error.facility());
+
+        bundle.get_data().map_err(|err| {
+            err.with_context(error.context())
+                .with_facility(error.facility())
+                .into()
+        })
+    }
+
     pub fn scsi_inquiry(
         &self,
         logical_unit_number: LogicalUnitNumber,
@@ -399,7 +432,7 @@ impl Device {
         bulk_out: crate::usb::mass_storage::EndpointDescriptor,
         ehci_controller: &mut Controller,
     ) -> error::ResultWithTrace<scsi::cdb::data::Inquiry> {
-        let scsi_inquiry_bundle = usb::ehci::transfer::scsi::inquiry_bundle(
+        let bundle = usb::ehci::transfer::scsi::inquiry_bundle(
             self.address,
             self.default_endpoint_speed,
             logical_unit_number,
@@ -407,29 +440,12 @@ impl Device {
             bulk_in,
             bulk_out,
         )?;
-
-        error::try_with_trace!(
-            ehci_controller.run_transfer_sync(&scsi_inquiry_bundle),
-            context: Context::ScsiInquiry(logical_unit_number.into()),
-            facility: Facility::EhciDevice(self.controller_address(), self.address)
-        );
-
-        let csw = scsi_inquiry_bundle.get_command_status_wrapper()?;
-
-        let error = Error::blank()
-            .with_context(Context::ScsiInquiry(logical_unit_number.into()))
-            .with_facility(Facility::EhciDevice(
-                self.controller_address(),
-                self.address,
-            ));
-
-        try_with_trace!(csw.validate(tag), context: error.context(), facility: error.facility());
-
-        scsi_inquiry_bundle.get_inquiry_data().map_err(|err| {
-            err.with_context(error.context())
-                .with_facility(error.facility())
-                .into()
-        })
+        self.run_scsi_request(
+            bundle,
+            tag,
+            ehci_controller,
+            Context::ScsiInquiry(logical_unit_number.into()),
+        )
     }
 
     pub fn scsi_test_unit_ready(
@@ -466,6 +482,30 @@ impl Device {
 
         csw.validate(tag)
             .map_err(|err| error.with_fault(err.fault()).into())
+    }
+
+    pub fn scsi_read_capacity(
+        &self,
+        logical_unit_number: LogicalUnitNumber,
+        tag: CommandWrapperTag,
+        bulk_in: crate::usb::mass_storage::EndpointDescriptor,
+        bulk_out: crate::usb::mass_storage::EndpointDescriptor,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<scsi::cdb::data::ReadCapacity> {
+        let bundle = usb::ehci::transfer::scsi::read_capacity_bundle(
+            self.address,
+            self.default_endpoint_speed,
+            logical_unit_number,
+            tag,
+            bulk_in,
+            bulk_out,
+        )?;
+        self.run_scsi_request(
+            bundle,
+            tag,
+            ehci_controller,
+            Context::ScsiReadCapacity(logical_unit_number.into()),
+        )
     }
 
     pub fn address(&self) -> Address {

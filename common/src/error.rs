@@ -81,6 +81,8 @@ pub enum Context {
     BuildingUSBMassStorageDevice,
     #[error("SCSI test unit ready on {0}")]
     ScsiTestUnitReady(u8),
+    #[error("SCSI read capacity on {0}")]
+    ScsiReadCapacity(u8),
 }
 
 #[derive(Clone, Copy, Debug, Error)]

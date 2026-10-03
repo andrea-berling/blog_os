@@ -27,6 +27,7 @@ pub mod cdb {
         enum OperationCode {
             TestUnitReady = 0x00,
             Inquiry = 0x12,
+            ReadCapacity = 0x25,
         }
 
         #[derive(IntoBytes, Immutable)]
@@ -49,9 +50,13 @@ pub mod cdb {
             padding: [u8; 6],
         }
 
-        pub enum Command {
-            Inquiry(Inquiry),
-            TestUnitReady(TestUnitReady),
+        #[repr(C)]
+        #[derive(IntoBytes, Immutable)]
+        pub struct ReadCapacity {
+            operation_code: OperationCode,
+            logical_unit_number_byte: u8,
+            reserved: [u8; 8],
+            padding: [u8; 2],
         }
 
         impl Inquiry {
@@ -84,6 +89,20 @@ pub mod cdb {
             }
         }
 
+        impl ReadCapacity {
+            pub fn new(logical_unit_number: LogicalUnitNumber) -> Self {
+                let mut result = Self {
+                    operation_code: OperationCode::ReadCapacity,
+                    logical_unit_number_byte: 0,
+                    reserved: [0; _],
+                    padding: [0; _],
+                };
+
+                bits::set_bits!(bits_expr: result.logical_unit_number_byte, value: u8::from(logical_unit_number) & 0x7, n_bits: 3, starts_at_bit: 5, bits_expr_ty: u8);
+                result
+            }
+        }
+
         impl TryFrom<Inquiry> for crate::usb::bbb::CommandBlock {
             type Error = error::Error;
 
@@ -99,11 +118,19 @@ pub mod cdb {
                 Self::try_from(value.as_bytes())
             }
         }
+
+        impl TryFrom<ReadCapacity> for crate::usb::bbb::CommandBlock {
+            type Error = error::Error;
+
+            fn try_from(value: ReadCapacity) -> error::Result<Self> {
+                Self::try_from(value.as_bytes())
+            }
+        }
     }
 
     pub mod data {
         use num_enum::TryFromPrimitive;
-        use zerocopy::TryFromBytes;
+        use zerocopy::{BE, TryFromBytes, U32};
 
         use crate::bits;
 
@@ -129,6 +156,13 @@ pub mod cdb {
             product_revision_level: [u8; 4],
         }
 
+        #[derive(TryFromBytes, Clone)]
+        #[repr(C)]
+        pub struct ReadCapacity {
+            last_logical_block_address: U32<BE>,
+            block_length_bytes: U32<BE>,
+        }
+
         impl Inquiry {
             pub fn get_peripheral_device_type(&self) -> Option<PeripheralDeviceType> {
                 bits::get_bits!(bits_expr: self.pdt_word, n_bits: 5, starts_at_bit: 0, return_ty: u8).try_into().ok()
@@ -137,6 +171,16 @@ pub mod cdb {
             pub fn is_removable(&self) -> bool {
                 bits::get_bits!(bits_expr: self.removable_word, n_bits: 1, starts_at_bit: 7, return_ty: u8)
                     != 0
+            }
+        }
+
+        impl ReadCapacity {
+            pub fn last_logical_block_address(&self) -> U32<zerocopy::BigEndian> {
+                self.last_logical_block_address
+            }
+
+            pub fn block_length_bytes(&self) -> U32<zerocopy::BigEndian> {
+                self.block_length_bytes
             }
         }
 
