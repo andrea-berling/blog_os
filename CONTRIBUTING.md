@@ -43,7 +43,7 @@ pattern in `queue_head.rs`).
   `error::ResultWithTrace<T>`; return plain `error::Result<T>` only for leaf producers
   whose error is one fault with no context of its own: shallow `From`/`TryFrom`
   conversions, small validators, and containers.
-- Propagate with `attempt_traced!` instead of `?`: `context:`/`facility:` decorate the
+- Propagate with `try_with_trace!` instead of `?`: `context:`/`facility:` decorate the
   current error, `fail_with:` records the received error as a cause and installs this
   frame's complete error, which must carry a real `Fault`. Use bare `?` only for pure
   pass-through.
