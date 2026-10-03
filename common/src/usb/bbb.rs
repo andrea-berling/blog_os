@@ -14,9 +14,11 @@ pub struct CommandBlockWrapperSignature(u32);
 pub struct CommandStatusWrapperSignature(u32);
 #[derive(TryFromBytes, PartialEq, Eq, Clone, Copy)]
 pub struct CommandWrapperTag(u32);
+#[derive(Clone, Copy)]
 pub struct CommandBlockLength(u8);
 pub struct CommandBlock([u8; 16]);
 
+#[derive(Clone, Copy)]
 pub enum Direction {
     DeviceToHost,
     HostToDevice,

@@ -32,6 +32,7 @@ use crate::{
 };
 
 pub mod alloc;
+pub mod bbb;
 pub mod queue_head;
 pub mod transfer;
 pub mod transfer_descriptor;
@@ -429,6 +430,42 @@ impl Device {
                 .with_facility(error.facility())
                 .into()
         })
+    }
+
+    pub fn scsi_test_unit_ready(
+        &self,
+        logical_unit_number: LogicalUnitNumber,
+        tag: CommandWrapperTag,
+        bulk_in: crate::usb::mass_storage::EndpointDescriptor,
+        bulk_out: crate::usb::mass_storage::EndpointDescriptor,
+        ehci_controller: &mut Controller,
+    ) -> error::ResultWithTrace<()> {
+        let bundle = usb::ehci::transfer::scsi::test_unit_ready_bundle(
+            self.address,
+            self.default_endpoint_speed,
+            logical_unit_number,
+            tag,
+            bulk_in,
+            bulk_out,
+        )?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&bundle),
+            context: Context::ScsiTestUnitReady(logical_unit_number.into()),
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        let csw = bundle.get_command_status_wrapper()?;
+
+        let error = Error::blank()
+            .with_context(Context::ScsiTestUnitReady(logical_unit_number.into()))
+            .with_facility(Facility::EhciDevice(
+                self.controller_address(),
+                self.address,
+            ));
+
+        csw.validate(tag)
+            .map_err(|err| error.with_fault(err.fault()).into())
     }
 
     pub fn address(&self) -> Address {

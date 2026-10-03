@@ -443,6 +443,17 @@ impl StaticBundle {
             .current_qtd_pointer()
             .read_with(|current_qtd_pointer| current_qtd_pointer.is_null())
     }
+
+    pub fn logically_chain_queue_heads(&mut self) -> error::ResultWithTrace<()> {
+        let n = self.queue_heads.len();
+        for i in 0..n {
+            self.logically_link_queue_heads(
+                QueueHeadIndex::from(i),
+                Some(QueueHeadIndex::from((i + 1) % n)),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl StaticBundleAllocator {

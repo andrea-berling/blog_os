@@ -79,6 +79,8 @@ pub enum Context {
     EnumeratingUSBDevices,
     #[error("Building USB Mass Storage devices")]
     BuildingUSBMassStorageDevice,
+    #[error("SCSI test unit ready on {0}")]
+    ScsiTestUnitReady(u8),
 }
 
 #[derive(Clone, Copy, Debug, Error)]

@@ -22,10 +22,17 @@ pub mod cdb {
 
         use crate::{bits, error, scsi::LogicalUnitNumber};
 
+        #[repr(u8)]
+        #[derive(IntoBytes, Immutable)]
+        enum OperationCode {
+            TestUnitReady = 0x00,
+            Inquiry = 0x12,
+        }
+
         #[derive(IntoBytes, Immutable)]
         #[repr(C)]
         pub struct Inquiry {
-            operation_code: u8,
+            operation_code: OperationCode,
             logical_unit_number_byte: u8,
             reserved1: [u8; 2],
             allocation_length: u8,
@@ -33,10 +40,24 @@ pub mod cdb {
             padding: [u8; 6],
         }
 
+        #[repr(C)]
+        #[derive(IntoBytes, Immutable)]
+        pub struct TestUnitReady {
+            operation_code: OperationCode,
+            logical_unit_number_byte: u8,
+            reserved1: [u8; 4],
+            padding: [u8; 6],
+        }
+
+        pub enum Command {
+            Inquiry(Inquiry),
+            TestUnitReady(TestUnitReady),
+        }
+
         impl Inquiry {
             pub fn new(logical_unit_number: LogicalUnitNumber) -> Self {
                 let mut result = Self {
-                    operation_code: 0x12,
+                    operation_code: OperationCode::Inquiry,
                     logical_unit_number_byte: 0,
                     reserved1: [0; _],
                     allocation_length: 0x24,
@@ -49,10 +70,32 @@ pub mod cdb {
             }
         }
 
+        impl TestUnitReady {
+            pub fn new(logical_unit_number: LogicalUnitNumber) -> Self {
+                let mut result = Self {
+                    operation_code: OperationCode::TestUnitReady,
+                    logical_unit_number_byte: 0,
+                    reserved1: [0; _],
+                    padding: [0; _],
+                };
+
+                bits::set_bits!(bits_expr: result.logical_unit_number_byte, value: u8::from(logical_unit_number) & 0x7, n_bits: 3, starts_at_bit: 5, bits_expr_ty: u8);
+                result
+            }
+        }
+
         impl TryFrom<Inquiry> for crate::usb::bbb::CommandBlock {
             type Error = error::Error;
 
             fn try_from(value: Inquiry) -> error::Result<Self> {
+                Self::try_from(value.as_bytes())
+            }
+        }
+
+        impl TryFrom<TestUnitReady> for crate::usb::bbb::CommandBlock {
+            type Error = error::Error;
+
+            fn try_from(value: TestUnitReady) -> error::Result<Self> {
                 Self::try_from(value.as_bytes())
             }
         }

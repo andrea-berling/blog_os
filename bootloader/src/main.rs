@@ -525,7 +525,7 @@ fn load_kernel_from_boot_disk(
                 fail_with: error.with_context(Context::LookingForUSBMassStorageDevices)
             );
 
-            for usb_mass_storage_device in &usb_mass_storage_devices {
+            'usb_mass_storage_devices: for usb_mass_storage_device in &usb_mass_storage_devices {
                 let usb::Class::MassStorage(
                     usb::MassStorageSubclass::SCSITransparentCommandSet,
                     usb::MassStorageProtocol::Bbb,
@@ -602,6 +602,21 @@ fn load_kernel_from_boot_disk(
                 };
 
                 serial::log::debug_no_sync!("Inquiry data:\n{inquiry_data}");
+
+                scsi_tag.increment();
+
+                if let Err(err) = usb_device.scsi_test_unit_ready(
+                    max_lun,
+                    scsi_tag,
+                    *usb_mass_storage_device.bulk_in(),
+                    *usb_mass_storage_device.bulk_out(),
+                    corresponding_controller,
+                ) {
+                    // TODO: implement REQUEST SENSE
+                    // TODO: reset recovery
+                    serial::log::debug_no_sync!("Error: {err:#}");
+                    continue 'usb_mass_storage_devices;
+                }
             }
 
             todo!("let's have some fun")
