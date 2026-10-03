@@ -79,33 +79,9 @@ impl CommandStatusWrapperSignature {
     }
 }
 
-impl Default for CommandStatusWrapperSignature {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for CommandBlockWrapperSignature {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CommandWrapperTag {
     pub fn increment(&mut self) {
         self.0 = self.0.wrapping_add(1)
-    }
-}
-
-impl From<u32> for CommandWrapperTag {
-    fn from(value: u32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<CommandWrapperTag> for u32 {
-    fn from(value: CommandWrapperTag) -> Self {
-        value.0
     }
 }
 
@@ -202,29 +178,33 @@ impl CommandStatusWrapper {
     }
 }
 
-impl From<CommandBlockLength> for u8 {
-    fn from(value: CommandBlockLength) -> Self {
+impl Default for CommandBlockWrapperSignature {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for CommandStatusWrapperSignature {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<u32> for CommandWrapperTag {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<CommandWrapperTag> for u32 {
+    fn from(value: CommandWrapperTag) -> Self {
         value.0
     }
 }
 
-impl core::fmt::Display for CommandStatusWrapper {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "Signature: {:#x}", self.signature().0)?;
-        writeln!(f, "Tag: {:#x}", self.tag().0)?;
-        writeln!(f, "Data residue: {}", self.data_residue())?;
-        writeln!(f, "Status: {:?}", self.get_status())?;
-        Ok(())
-    }
-}
-
-impl core::fmt::Display for Status {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Status::CommandPassed => f.write_str("Command passed"),
-            Status::CommandFailed => f.write_str("Command failed"),
-            Status::PhaseError => f.write_str("Phase error"),
-        }
+impl From<CommandBlockLength> for u8 {
+    fn from(value: CommandBlockLength) -> Self {
+        value.0
     }
 }
 
@@ -249,5 +229,25 @@ impl TryFrom<&[u8]> for CommandBlock {
         let mut result = Self([0; _]);
         result.0[..len].copy_from_slice(&value[..len]);
         Ok(result)
+    }
+}
+
+impl core::fmt::Display for CommandStatusWrapper {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Signature: {:#x}", self.signature().0)?;
+        writeln!(f, "Tag: {:#x}", self.tag().0)?;
+        writeln!(f, "Data residue: {}", self.data_residue())?;
+        writeln!(f, "Status: {:?}", self.get_status())?;
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for Status {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Status::CommandPassed => f.write_str("Command passed"),
+            Status::CommandFailed => f.write_str("Command failed"),
+            Status::PhaseError => f.write_str("Phase error"),
+        }
     }
 }
