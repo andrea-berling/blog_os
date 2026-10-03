@@ -1092,6 +1092,12 @@ impl EndpointNumber {
     pub const CONTROL: Self = Self(0);
 }
 
+impl From<Feature> for u16 {
+    fn from(value: Feature) -> Self {
+        value as u16
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::DescriptorType;
@@ -1101,11 +1107,5 @@ mod tests {
         for raw in 0..=u8::MAX {
             assert_eq!(u8::from(DescriptorType::from(raw)), raw);
         }
-    }
-}
-
-impl From<Feature> for u16 {
-    fn from(value: Feature) -> Self {
-        value as u16
     }
 }
