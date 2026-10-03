@@ -249,3 +249,43 @@ pub mod cdb {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use zerocopy::{IntoBytes as _, TryFromBytes as _};
+
+    use super::{
+        LogicalUnitNumber,
+        cdb::{command, data},
+    };
+
+    #[test]
+    fn read_capacity_command_layout() {
+        let command = command::ReadCapacity::new(LogicalUnitNumber::from(3));
+        let bytes = command.as_bytes();
+
+        // The bootability specification pads every CDB to 12 bytes (section 1.3.3).
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(bytes[0], 0x25);
+        // Logical unit number 3 sits in bits 7-5 of byte 1.
+        assert_eq!(bytes[1], 0x60);
+        assert!(bytes[2..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn read_capacity_command_masks_logical_unit_number_to_three_bits() {
+        let command = command::ReadCapacity::new(LogicalUnitNumber::from(0xf));
+        assert_eq!(command.as_bytes()[1], 0xe0);
+    }
+
+    #[test]
+    fn read_capacity_data_layout() {
+        let bytes = [0x00, 0x12, 0x34, 0x56, 0x00, 0x00, 0x02, 0x00];
+        let (capacity, remainder) = data::ReadCapacity::try_read_from_prefix(&bytes)
+            .expect("eight bytes are exactly one READ CAPACITY response");
+
+        assert!(remainder.is_empty());
+        assert_eq!(capacity.last_logical_block_address().get(), 0x0012_3456);
+        assert_eq!(capacity.block_length_bytes().get(), 512);
+    }
+}
