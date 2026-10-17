@@ -167,7 +167,7 @@ pub enum USBStatusRegisterFlag {
     AsynchronousScheduleStatus = 1 << 15,
 }
 
-make_bitmap!(new_type: USBStatusRegister, underlying_flag_type: USBStatusRegisterFlag, repr: u32, nodisplay);
+make_bitmap!(new_type: USBStatusRegister, underlying_flag_type: USBStatusRegisterFlag, repr: u32, bit_skipper: |i| i > 5 && i < 12 || i > 15);
 
 #[derive(TryFromPrimitive, Debug)]
 #[repr(u8)]
@@ -1131,6 +1131,29 @@ impl Display for PortStatusAndControlRegisterFlag {
             PortStatusAndControlRegisterFlag::WakeOnOverCurrent => "Wake on over-current",
         };
         write!(f, "{}", description)
+    }
+}
+
+impl core::fmt::Display for USBStatusRegisterFlag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            USBStatusRegisterFlag::USBInterrupt => write!(f, "USB Interrupt"),
+            USBStatusRegisterFlag::USBErrorInterrupt => write!(f, "USB Error Interrupt"),
+            USBStatusRegisterFlag::PortChangeDetect => write!(f, "Port Change Detect"),
+            USBStatusRegisterFlag::FrameListRollover => write!(f, "Frame List Rollover"),
+            USBStatusRegisterFlag::HostSystemError => write!(f, "Host System Error"),
+            USBStatusRegisterFlag::InterruptOnAsyncAdvance => {
+                write!(f, "Interrupt On Async Advance")
+            }
+            USBStatusRegisterFlag::HostControllerHalted => write!(f, "Host Controller Halted"),
+            USBStatusRegisterFlag::Reclamation => write!(f, "Reclamation"),
+            USBStatusRegisterFlag::PeriodicScheduleStatus => {
+                write!(f, "Periodic Schedule Status")
+            }
+            USBStatusRegisterFlag::AsynchronousScheduleStatus => {
+                write!(f, "Asynchronous Schedule Status")
+            }
+        }
     }
 }
 

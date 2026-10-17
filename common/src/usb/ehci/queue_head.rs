@@ -61,7 +61,7 @@ pub enum EndpointCharacteristicsBit {
     ControlEndpoint = 1 << 27,
 }
 
-make_bitmap!(new_type: EndpointCharacteristics, underlying_flag_type: EndpointCharacteristicsBit, repr: u32, bit_skipper: |i| i != 7 && i != 14 && i != 15 && i != 27);
+make_bitmap!(new_type: EndpointCharacteristics, underlying_flag_type: EndpointCharacteristicsBit, repr: u32, nodisplay);
 
 pub struct EndpointCapabilities {
     bits: u32,
@@ -480,7 +480,14 @@ impl core::fmt::Display for RawQueueHead {
             self.alternate_next_qtd_pointer
         )?;
         writeln!(f, "Execution Cache Area: {}", self.execution_cache_area)?;
-        writeln!(f, "Word 7: {:#x}", self.word7.read())?;
+        let word7 = self.word7.read();
+        writeln!(
+            f,
+            "Word 7: {:#x} (buffer pointer: {:#x}, current offset: {})",
+            word7,
+            word7 & !((1u32 << 12) - 1),
+            bits::get_bits!(bits_expr: word7, n_bits: 12, starts_at_bit: 0, return_ty: u32)
+        )?;
         writeln!(f, "Word 8: {:#x}", self.word8.read())?;
         writeln!(f, "Word 9: {:#x}", self.word9.read())?;
         writeln!(f, "Word 10: {:#x}", self.word10.read())?;
@@ -507,6 +514,36 @@ impl core::fmt::Display for QueueHead {
             "qTD alternate next pointer: {:?}",
             self.alternate_next_queue_transfer_descriptor_index
         )?;
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for EndpointCharacteristics {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // The flag bits of the endpoint characteristics word, in bit order
+        const FLAG_BITS: [EndpointCharacteristicsBit; 4] = [
+            EndpointCharacteristicsBit::InactivateOnNextTransaction,
+            EndpointCharacteristicsBit::DataToggleControl,
+            EndpointCharacteristicsBit::HeadOfReclamationListFlag,
+            EndpointCharacteristicsBit::ControlEndpoint,
+        ];
+
+        let mut printed_once = false;
+        for flag in FLAG_BITS {
+            if self.is_set(flag) {
+                if printed_once {
+                    write!(f, "|")?;
+                }
+                write!(f, "{}", flag)?;
+                printed_once = true;
+            }
+        }
+
+        writeln!(f, "NAK Count reload: {}", self.get_nak_count_reload())?;
+        writeln!(f, "Max packet length: {}", self.get_max_packet_length())?;
+        writeln!(f, "Endpoint speed: {}", self.get_endpoint_speed())?;
+        writeln!(f, "Endpoint number: {}", self.get_endpoint_number())?;
+        writeln!(f, "Device address: {}", self.get_device_address())?;
         Ok(())
     }
 }
