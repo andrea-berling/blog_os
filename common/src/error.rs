@@ -11,6 +11,7 @@ use zerocopy::{TryCastError, TryFromBytes, TryReadError};
 
 use crate::{
     array_vec::ArrayVec,
+    scsi::{LogicalBlockAddress, LogicalUnitNumber},
     usb::setup::{Address, ConfigurationValue, InterfaceNumber},
 };
 
@@ -83,6 +84,17 @@ pub enum Context {
     ScsiTestUnitReady(u8),
     #[error("SCSI read capacity on {0}")]
     ScsiReadCapacity(u8),
+    #[error(
+        "SCSI read on {} (LBA: {:#x}, transfer length: {} blocks)",
+        u8::from(*lun),
+        u32::from(*lba),
+        transfer_length
+    )]
+    ScsiRead {
+        lba: LogicalBlockAddress,
+        transfer_length: u16,
+        lun: LogicalUnitNumber,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Error)]

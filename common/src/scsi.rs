@@ -1,7 +1,13 @@
 use zerocopy::TryFromBytes;
 
-#[derive(Clone, Copy, TryFromBytes)]
+#[derive(Clone, Copy, TryFromBytes, Debug)]
 pub struct LogicalUnitNumber(u8);
+
+#[derive(Clone, Copy, TryFromBytes, Debug)]
+pub struct LogicalBlockAddress(u32);
+
+#[derive(Clone, Copy, TryFromBytes, Debug)]
+pub struct BlockLengthBytes(u32);
 
 impl From<u8> for LogicalUnitNumber {
     fn from(value: u8) -> Self {
@@ -15,12 +21,39 @@ impl From<LogicalUnitNumber> for u8 {
     }
 }
 
+impl From<u32> for LogicalBlockAddress {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<LogicalBlockAddress> for u32 {
+    fn from(value: LogicalBlockAddress) -> Self {
+        value.0
+    }
+}
+
+impl From<u32> for BlockLengthBytes {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<BlockLengthBytes> for u32 {
+    fn from(value: BlockLengthBytes) -> Self {
+        value.0
+    }
+}
+
 pub mod cdb {
     pub mod command {
 
-        use zerocopy::{Immutable, IntoBytes};
+        use zerocopy::{BE, Immutable, IntoBytes, U16, U32};
 
-        use crate::{bits, error, scsi::LogicalUnitNumber};
+        use crate::{
+            bits, error,
+            scsi::{LogicalBlockAddress, LogicalUnitNumber},
+        };
 
         #[repr(u8)]
         #[derive(IntoBytes, Immutable)]
@@ -28,6 +61,7 @@ pub mod cdb {
             TestUnitReady = 0x00,
             Inquiry = 0x12,
             ReadCapacity = 0x25,
+            Read = 0x28,
         }
 
         #[derive(IntoBytes, Immutable)]
@@ -56,6 +90,18 @@ pub mod cdb {
             operation_code: OperationCode,
             logical_unit_number_byte: u8,
             reserved: [u8; 8],
+            padding: [u8; 2],
+        }
+
+        #[repr(C)]
+        #[derive(IntoBytes, Immutable)]
+        pub struct Read {
+            operation_code: OperationCode,
+            logical_unit_number_byte: u8,
+            logical_block_address: U32<BE>,
+            reserved1: u8,
+            transfer_length: U16<BE>,
+            reserved2: u8,
             padding: [u8; 2],
         }
 
@@ -103,6 +149,27 @@ pub mod cdb {
             }
         }
 
+        impl Read {
+            pub fn new(
+                logical_unit_number: LogicalUnitNumber,
+                lba: LogicalBlockAddress,
+                transfer_length: u16,
+            ) -> Self {
+                let mut result = Self {
+                    operation_code: OperationCode::Read,
+                    logical_unit_number_byte: 0,
+                    reserved1: 0,
+                    logical_block_address: u32::from(lba).into(),
+                    reserved2: 0,
+                    transfer_length: transfer_length.into(),
+                    padding: [0; _],
+                };
+
+                bits::set_bits!(bits_expr: result.logical_unit_number_byte, value: u8::from(logical_unit_number) & 0x7, n_bits: 3, starts_at_bit: 5, bits_expr_ty: u8);
+                result
+            }
+        }
+
         impl TryFrom<Inquiry> for crate::usb::bbb::CommandBlock {
             type Error = error::Error;
 
@@ -126,13 +193,21 @@ pub mod cdb {
                 Self::try_from(value.as_bytes())
             }
         }
+
+        impl TryFrom<Read> for crate::usb::bbb::CommandBlock {
+            type Error = error::Error;
+
+            fn try_from(value: Read) -> error::Result<Self> {
+                Self::try_from(value.as_bytes())
+            }
+        }
     }
 
     pub mod data {
         use num_enum::TryFromPrimitive;
         use zerocopy::{BE, TryFromBytes, U32};
 
-        use crate::bits;
+        use crate::{bits, scsi::BlockLengthBytes};
 
         #[derive(TryFromPrimitive)]
         #[repr(u8)]
@@ -179,8 +254,8 @@ pub mod cdb {
                 self.last_logical_block_address
             }
 
-            pub fn block_length_bytes(&self) -> U32<zerocopy::BigEndian> {
-                self.block_length_bytes
+            pub fn block_length_bytes(&self) -> BlockLengthBytes {
+                self.block_length_bytes.get().into()
             }
         }
 
@@ -255,7 +330,7 @@ mod tests {
     use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
     use super::{
-        LogicalUnitNumber,
+        LogicalBlockAddress, LogicalUnitNumber,
         cdb::{command, data},
     };
 
@@ -279,6 +354,39 @@ mod tests {
     }
 
     #[test]
+    fn read_command_layout() {
+        let command = command::Read::new(
+            LogicalUnitNumber::from(3),
+            LogicalBlockAddress::from(0x0012_3456),
+            2,
+        );
+        let bytes = command.as_bytes();
+
+        // The bootability specification pads every CDB to 12 bytes (section 1.3.3).
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(bytes[0], 0x28);
+        // Logical unit number 3 sits in bits 7-5 of byte 1.
+        assert_eq!(bytes[1], 0x60);
+        // Logical block address, big endian, bytes 2-5.
+        assert_eq!(bytes[2..6], [0x00, 0x12, 0x34, 0x56]);
+        assert_eq!(bytes[6], 0);
+        // Transfer length in blocks, big endian, bytes 7-8.
+        assert_eq!(bytes[7..9], [0x00, 0x02]);
+        assert_eq!(bytes[9], 0);
+        assert_eq!(bytes[10..], [0, 0]);
+    }
+
+    #[test]
+    fn read_command_masks_logical_unit_number_to_three_bits() {
+        let command = command::Read::new(
+            LogicalUnitNumber::from(0xf),
+            LogicalBlockAddress::from(0),
+            1,
+        );
+        assert_eq!(command.as_bytes()[1], 0xe0);
+    }
+
+    #[test]
     fn read_capacity_data_layout() {
         let bytes = [0x00, 0x12, 0x34, 0x56, 0x00, 0x00, 0x02, 0x00];
         let (capacity, remainder) = data::ReadCapacity::try_read_from_prefix(&bytes)
@@ -286,6 +394,6 @@ mod tests {
 
         assert!(remainder.is_empty());
         assert_eq!(capacity.last_logical_block_address().get(), 0x0012_3456);
-        assert_eq!(capacity.block_length_bytes().get(), 512);
+        assert_eq!(u32::from(capacity.block_length_bytes()), 512);
     }
 }
