@@ -9,7 +9,7 @@ use crate::{
     make_bitmap,
     mmio::{self, Maskable},
     pci::{self, ConfigAddressRegister},
-    scsi::{self, LogicalUnitNumber},
+    scsi::{self, BlockLengthBytes, LogicalBlockAddress, LogicalUnitNumber},
     serial,
     timer::{self, LowPrecisionTimer},
     try_with_trace,
@@ -510,6 +510,103 @@ impl Device {
             ehci_controller,
             Context::ScsiReadCapacity(logical_unit_number.into()),
         )
+    }
+
+    pub fn scsi_read(
+        &self,
+        logical_unit_number: LogicalUnitNumber,
+        tag: CommandWrapperTag,
+        bulk_in: crate::usb::mass_storage::EndpointDescriptor,
+        bulk_out: crate::usb::mass_storage::EndpointDescriptor,
+        lba: LogicalBlockAddress,
+        transfer_length: u16,
+        block_length: BlockLengthBytes,
+        ehci_controller: &mut Controller,
+        output_buffer: &mut [u8],
+    ) -> error::ResultWithTrace<()> {
+        let bytes_to_read = transfer_length as u32 * u32::from(block_length);
+        if output_buffer.len() < bytes_to_read as usize {
+            return Err(Error::new(
+                Fault::WrongBufferSize {
+                    expected: bytes_to_read as u64,
+                    actual: output_buffer.len() as u64,
+                },
+                Context::ScsiRead {
+                    lba,
+                    transfer_length,
+                    lun: logical_unit_number,
+                },
+                Facility::EhciDevice(self.controller_address(), self.address),
+            )
+            .into());
+        }
+
+        let read_bundle = usb::ehci::transfer::scsi::read_bundle(
+            self.address,
+            self.default_endpoint_speed,
+            logical_unit_number,
+            tag,
+            bulk_in,
+            bulk_out,
+            lba,
+            transfer_length,
+            block_length,
+        )?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&read_bundle),
+            context: Context::ScsiRead { lba, transfer_length, lun: logical_unit_number },
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        // The data phase ran on the bulk-in queue head (QH 1): its overlay holds
+        // the data toggle the device expects next on the bulk-in pipe, where the
+        // CSW is read too.
+        let data_toggle = read_bundle.queue_heads()[1]
+            .execution_cache_area()
+            .read_with(|execution_cache_area| {
+                execution_cache_area
+                    .is_set(transfer_descriptor::QueueTransferDescriptorTokenBit::DataToggle)
+            });
+        // NOTE: why reading the CSW separately from above? This bug: https://gitlab.com/qemu-project/qemu/-/work_items/4658
+        let csw_bundle = usb::ehci::transfer::scsi::csw_bundle(
+            self.address,
+            self.default_endpoint_speed,
+            bulk_in,
+            data_toggle,
+        )?;
+
+        error::try_with_trace!(
+            ehci_controller.run_transfer_sync(&csw_bundle),
+            context: Context::ScsiRead { lba, transfer_length, lun: logical_unit_number },
+            facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        let csw = error::try_with_trace!(csw_bundle.get_command_status_wrapper(),
+                context: Context::ScsiRead { lba, transfer_length, lun: logical_unit_number },
+                facility: Facility::EhciDevice(self.controller_address(), self.address)
+        );
+
+        let error = Error::blank()
+            .with_context(Context::ScsiRead {
+                lba,
+                transfer_length,
+                lun: logical_unit_number,
+            })
+            .with_facility(Facility::EhciDevice(
+                self.controller_address(),
+                self.address,
+            ));
+
+        csw.validate(tag)
+            .map_err(|err| error.with_fault(err.fault()))?;
+
+        let mut offset = 0;
+        for chunk in read_bundle.chunks() {
+            output_buffer[offset..][..chunk.len()].copy_from_slice(&chunk);
+            offset += chunk.len();
+        }
+        Ok(())
     }
 
     pub fn find_corresponding_controller_mut<'a>(

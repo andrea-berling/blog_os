@@ -25,9 +25,9 @@ use crate::{
     },
 };
 
-const MAX_QUEUE_HEADS: usize = 2;
+const MAX_QUEUE_HEADS: usize = 4;
 const MAX_QUEUE_TRANSFER_DESCRIPTORS: usize = 5;
-const MAX_BUFFER_PAGES: usize = 5;
+const MAX_BUFFER_PAGES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub struct AllocationRequest {
