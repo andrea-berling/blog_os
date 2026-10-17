@@ -20,6 +20,7 @@ mod edd;
 use core::panic::PanicInfo;
 
 use common::{
+    array_vec::ArrayVec,
     ata,
     control_registers::{
         self, ControlRegister0, ControlRegister3, ControlRegister4, ExtendedFeatureEnableRegister,
@@ -29,6 +30,7 @@ use common::{
     gdt::{self, SegmentDescriptor},
     idt,
     paging::{self},
+    scsi::LogicalBlockAddress,
     serial, tss, vga,
 };
 
@@ -640,8 +642,27 @@ fn load_kernel_from_boot_disk(
                 );
                 serial::log::debug_no_sync!(
                     "Block length: {}",
-                    capacity_data.block_length_bytes().get()
+                    u32::from(capacity_data.block_length_bytes())
                 );
+
+                scsi_tag.increment();
+
+                let mut first_sector = ArrayVec::<u8, 4096>::new();
+                first_sector.resize(u32::from(capacity_data.block_length_bytes()) as usize, 0)?;
+
+                usb_device.scsi_read(
+                    max_lun,
+                    scsi_tag,
+                    *usb_mass_storage_device.bulk_in(),
+                    *usb_mass_storage_device.bulk_out(),
+                    LogicalBlockAddress::from(0),
+                    1,
+                    capacity_data.block_length_bytes(),
+                    corresponding_controller,
+                    &mut first_sector,
+                )?;
+
+                serial::log::debug_no_sync!("First sector: {:#x?}", &first_sector[..]);
             }
 
             todo!("let's have some fun")
