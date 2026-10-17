@@ -244,6 +244,8 @@ pub enum Fault {
     InvalidCommandBlockLength(u8),
     #[error("Invalid logical unit number: {0}")]
     InvalidLogicalUnitNumber(u8),
+    #[error("Invalid length: {length}, for a capacity of {capacity}")]
+    InvalidNewLength { length: usize, capacity: usize },
 }
 
 #[derive(Debug, Error, Clone, Copy)]

@@ -1,6 +1,7 @@
 use core::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut, Index, IndexMut},
+    slice::SliceIndex,
 };
 
 use crate::error::{self, Fault};
@@ -86,6 +87,23 @@ impl<T, const N: usize> ArrayVec<T, N> {
     }
 }
 
+impl<T: Copy, const N: usize> ArrayVec<T, N> {
+    pub fn resize(&mut self, new_len: usize, val: T) -> error::Result<()> {
+        if new_len > N {
+            return Err(Fault::InvalidNewLength {
+                length: new_len,
+                capacity: N,
+            }
+            .into());
+        }
+        self.len = new_len;
+        for value in &mut self.buffer[0..new_len] {
+            value.write(val);
+        }
+        Ok(())
+    }
+}
+
 impl<T, const N: usize> Deref for ArrayVec<T, N> {
     type Target = [T];
 
@@ -100,16 +118,16 @@ impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
     }
 }
 
-impl<T, const N: usize> Index<usize> for ArrayVec<T, N> {
-    type Output = T;
+impl<T, I: SliceIndex<[T]>, const N: usize> Index<I> for ArrayVec<T, N> {
+    type Output = <I as SliceIndex<[T]>>::Output;
 
-    fn index(&self, index: usize) -> &Self::Output {
+    fn index(&self, index: I) -> &Self::Output {
         &self.as_ref()[index]
     }
 }
 
-impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+impl<T, I: SliceIndex<[T]>, const N: usize> IndexMut<I> for ArrayVec<T, N> {
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
         &mut self.as_mut()[index]
     }
 }
